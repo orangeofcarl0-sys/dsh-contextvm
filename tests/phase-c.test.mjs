@@ -360,7 +360,8 @@ test('扫描工具：结果文本如实反映覆盖情况（§8.3）', async () 
     const { markerIds } = fill(vm, S, { count: 24, markerEvery: 6 });
     const { exhaustiveScanTool } = await import('../lib/tools/exhaustive_scan.js');
     const tool = exhaustiveScanTool(vm.runtime, { defineTool: (o) => o });
-    const out = await tool.execute({ question: '列出全部约束' }, { session: { id: S } });
+    // 形状必须与真实宿主一致：ToolExecutionInput 只有 agent（没有 session）
+    const out = await tool.execute({ question: '列出全部约束' }, { agent: { session: { id: S } } });
     assert.equal(out.ok, true);
     assert.equal(out.coverage_complete, true);
     assert.ok(out.result.includes('complete=true'));

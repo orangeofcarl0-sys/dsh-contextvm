@@ -53,7 +53,9 @@
     "test:acceptance": "node --test --test-concurrency=1 tests/acceptance.1m.test.mjs tests/acceptance.phase-a.test.mjs",
     "audit:code": "node tools/code-audit.mjs",
     "audit:dead": "node tools/dead-code-check.mjs",
-    "check": "node --check lib/index.js"
+    "check": "node --check lib/index.js",
+    "audit:host": "node tools/host-contract-audit.mjs",
+    "audit": "node tools/host-contract-audit.mjs && node tools/code-audit.mjs && node tools/dead-code-check.mjs"
   },
   "engines": {
     "node": ">=22.5.0"

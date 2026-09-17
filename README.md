@@ -53,9 +53,10 @@ ratios:
 ## 测试
 
 ```bash
-npm test                # 全部审计与验收测试（177 项，默认串行）
+npm test                # 全部审计与验收测试（180 项，默认串行）
 npm run test:parallel   # 同上但并行（更快，供快速迭代）
 npm run test:acceptance # 只跑 1M 语料与 Phase A 验收
+npm run audit:host      # 宿主契约实机审计（需本机安装 DSH；核对接口、工具 schema、文档化参数）
 npm run audit:code      # 结构复杂度审计（函数规模/嵌套/重复块/依赖环）
 npm run audit:dead      # 死代码与"上帝对象"检查
 npm run check           # 入口语法检查
@@ -121,6 +122,23 @@ lib/
 benchmark/              基准与探针（见 benchmark/README.md）
 tests/                  审计与验收测试
 tools/                  代码审计（code-audit.mjs / dead-code-check.mjs）
+```
+
+## 实机验证
+
+假宿主测试覆盖不了宿主接口本身。`npm run audit:host` 用**真实宿主包**做四段核对
+（工具定义能否被真 `defineTool` 编译、调用的成员是否真实存在、有无已知的错误访问、
+提示词文档化的调用参数能否通过宿主编译后的 schema）。
+
+在真实 DSH 进程里跑一轮的做法（与 `_probe-surface.yml` 同约定）：
+
+```bash
+# 1. 把插件放进 profile 的 node_modules（只拷运行面）
+cp -r lib package.json cordis.patch.yml "$DSH_HOME/profiles/headless/node_modules/dsh-contextvm/"
+# 2. 用一次性叠加层插入（参考仓库外同级目录的 _probe-contextvm.yml）
+dsh --profile headless --patch _probe-contextvm.yml --dump-config   # 先确认补丁合成
+dsh --profile headless --patch _probe-contextvm.yml "调用 contextvm_commit_state，把返回原文贴出来"
+# 3. 检查插件自建库：$DSH_HOME/contextvm/contextvm.db（或配置的 dbPath）
 ```
 
 ## 完成度

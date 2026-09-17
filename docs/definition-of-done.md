@@ -3,7 +3,8 @@
 逐条对照规范 §29 的 14 项完成条件，给出**可复跑的**证据。命令统一为：
 
 ```bash
-npm test                        # 177 项审计与验收测试
+npm test                        # 180 项审计与验收测试
+npm run audit:host              # 宿主契约实机审计（需本机安装 DSH）
 node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 ```
 
@@ -30,6 +31,47 @@ node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 （规范 §9.2.1，费用计入 `authoritative_state` 组件，限幅 35% / 最多 12 条）。这使得
 "不得重新推荐已否决方案"从"state 里恰好没有它"升级为"明确告知已被否决"。
 覆盖测试：`tests/context.test.mjs`「非 active 清单进入上下文」「非 active 清单受预算限幅」。
+
+
+## 补充：实机测试审计（2026-09-17）
+
+此前所有验证都跑在**假宿主**上，宿主接口是照类型声明假设的。本轮补了实机审计，
+共三层，逐层加深：
+
+### 第 1 层：宿主契约审计（`npm run audit:host`）
+
+- **A 段**：用宿主**真实的 `defineTool`** 编译我们全部 8 个工具定义 —— 假宿主只做透传，
+  永远发现不了 schema 形状错误（宿主还会校验 `additionalProperties` 必须显式声明）。
+- **B 段**：逐条核对我在代码里调用的 16 个宿主成员是否真实存在、字段名是否与假设一致。
+- **C 段**：反向检查代码里是否出现已知的错误访问方式（含注释剥离，避免把"记录坑的文档"误判为缺陷）。
+- **D 段**：用 ajv 把**提示词里文档化的调用参数**拿去校验宿主编译后的 schema。
+
+### 第 2 层：真实 DSH 进程加载（`dsh --profile headless --patch <probe.yml>`）
+
+插件装入 `headless` profile 的 node_modules，用一次性叠加层插入（与 `_probe-surface.yml` 同约定），
+`--dump-config` 先确认补丁合成，再跑真实一轮。证据：
+
+- 插件随宿主启动成功，`D:/dsh/_scratch/cvm-audit.db` 被建立（167KB）；
+- 迁移 v1 应用，11 张表建成（raw_events / raw_fts 及其影子表 / state_items / episodes / artifacts / kv）；
+- 真实会话事件被镜像入索引且 FTS 行数一致；`episodes` 出现 1 条（轮末缝确实跑了）。
+
+### 第 3 层：实机抓到的三个真缺陷（假宿主全都没测出）
+
+| # | 缺陷 | 为何假宿主测不出 | 修法 |
+|---|---|---|---|
+| 1 | 提示词要求空增量写 `next_action: null`，但工具 schema 写的是 `{type:'string'}`，模型照提示词调用被**宿主参数校验拒绝**（`invalid arguments: "next_action" must be a string`） | 假 `defineTool` 只透传，从不校验参数 | 参数规格改为**从提示词的 JSON schema 派生**（`lib/tools/spec.js`），并加 D 段守卫 |
+| 2 | 窗口解析读 `requestHeader().provider`，而 `EpochHeader` 的真实字段在 `.config` 之下 —— 永远取不到值，静默回退到插件配置路由，**会话跑在别的模型上时预算就算错了** | 假 session 的 `requestHeader()` 返回的是我臆想的形状 | 改读 `header?.config?.provider/model`，并加 C 段守卫 |
+| 3 | 宿主注入的合成上下文（`Current runtime context` 快照、`<system-reminder>` 技能目录）被记成 `user_message`，以最高 authority 参与打分并挤占 recent verbatim 预算 | 假事件没有 `source.kind` 字段 | 反转判定：只有 `kind === 'user'` 才算用户消息（§4.1） |
+
+第 3 项还有一个二阶发现：`<system-reminder>` 的 `source.kind` 是 **`skill-catalog`** ——
+一个我此前不知道的 kind。宿主文档写明 kind 词汇表是 **merge-extensible** 的（插件可自行登记），
+因此**白名单写法注定落后**，必须反过来判定。实测该轮镜像结果：用户输入 **5 token**，
+宿主样板 **1,206 token** 全部归为 `system_note`（比值 240:1）。
+
+### 每个守卫都做了阳性对照
+
+新加的守卫都用"故意植入原缺陷"验证过确实会失败（D 段重现了实机那条错误原文，
+C 段与隐私守卫同样验证），避免"看起来在检查、实际永远通过"。
 
 ## 补充：本轮结构优化（代码审计驱动）
 

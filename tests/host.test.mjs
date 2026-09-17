@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createContextVm } from '../lib/app/create.js';
 import {
-  applySeams, mapSessionEvent, blocksToText, hostEventId, lastTurn,
+  applySeams, mapSessionEvent, classifyEvent, blocksToText, hostEventId, lastTurn,
 } from '../lib/host/seams.js';
 import { createLlmPort } from '../lib/host/llm.js';
 import { fakeLlm } from './helpers.mjs';
@@ -71,9 +71,11 @@ test('blocksToText：保留文本与工具调用，丢弃 reasoning（§1.3）',
 });
 
 test('mapSessionEvent：只有四类 surface 事件入索引', () => {
-  assert.deepEqual(mapSessionEvent({ type: 'user/message', data: { content: [{ type: 'text', text: '你好' }] } }), {
-    role: 'user', eventType: 'user_message', content: '你好',
-  });
+  const mapped = mapSessionEvent({ type: 'user/message', data: { content: [{ type: 'text', text: '你好' }] } });
+  assert.equal(mapped.role, 'user');
+  assert.equal(mapped.eventType, 'user_message');
+  assert.equal(mapped.content, '你好');
+  assert.deepEqual(mapped.metadata, { sourceKind: null }, '无来源标记时 sourceKind 记 null');
   assert.equal(mapSessionEvent({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'a' }] } } }).eventType, 'assistant_message');
   assert.equal(mapSessionEvent({ type: 'tool/result', data: { content: [{ type: 'text', text: 'r' }] } }).eventType, 'tool_result');
   assert.equal(mapSessionEvent({ type: 'step/start', data: {} }), null);
@@ -325,4 +327,51 @@ test('LlmPort 适配器：宿主 llm 不可用时抛可诊断错误', async () =
   const { ctx } = fakeCtx({ llm: null });
   const port = createLlmPort(ctx, {});
   await assert.rejects(() => port.complete({ provider: 'p', model: 'm', messages: [] }), /宿主 llm 服务不可用/);
+});
+
+test('来源分类：宿主注入的合成上下文不得冒充用户消息（real-machine 发现）', () => {
+  // 真实用户输入
+  assert.deepEqual(
+    classifyEvent({ type: 'user/message', data: { source: { kind: 'user' }, content: [] } }),
+    { role: 'user', eventType: 'user_message', form: null, kind: 'user' },
+  );
+  // 宿主注入的快照（实测单条 3595 token）→ 记为 system_note，不再以 user authority 参与打分
+  assert.deepEqual(
+    classifyEvent({ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'harness', form: 'snapshot' }, content: [] } }),
+    { role: 'system', eventType: 'system_note', form: 'snapshot', kind: 'plugin' },
+  );
+  // 技能目录同样属于宿主注入
+  assert.equal(
+    classifyEvent({ type: 'user/message', data: { source: { kind: 'plugin', form: 'catalog' }, content: [] } }).eventType,
+    'system_note',
+  );
+  // 工具结果的来源
+  assert.equal(classifyEvent({ type: 'tool/result', data: { source: { kind: 'tool' }, content: [] } }).eventType, 'tool_result');
+  // 助手消息与未知事件
+  assert.equal(classifyEvent({ type: 'assistant/message', data: {} }).eventType, 'assistant_message');
+  assert.equal(classifyEvent({ type: 'step/start', data: {} }), null);
+  // 缺 source 的 user/message 仍按用户消息处理（老宿主/手搓事件的兼容面）
+  assert.equal(classifyEvent({ type: 'user/message', data: { content: [] } }).eventType, 'user_message');
+
+  // 关键：kind 是 merge-extensible 的，插件可自行登记新 kind。
+  // 因此判定必须反过来——非 user 的**任何** kind 都算注入上下文，白名单注定落后。
+  assert.equal(
+    classifyEvent({ type: 'user/message', data: { source: { kind: 'skill-catalog' }, content: [] } }).eventType,
+    'system_note',
+    '未知/插件自定义 kind 必须归为注入上下文（真机上出现过 skill-catalog）',
+  );
+  assert.equal(
+    classifyEvent({ type: 'user/message', data: { source: { kind: '某个未来才有的kind' }, content: [] } }).eventType,
+    'system_note',
+  );
+});
+
+test('来源分类：form 会带进索引元数据，便于后续排除宿主样板', () => {
+  const mapped = mapSessionEvent({
+    type: 'user/message',
+    data: { source: { kind: 'plugin', form: 'snapshot' }, content: [{ type: 'text', text: 'Current runtime context' }] },
+  });
+  assert.equal(mapped.eventType, 'system_note');
+  assert.equal(mapped.content, 'Current runtime context');
+  assert.deepEqual(mapped.metadata, { sourceKind: 'plugin', contextForm: 'snapshot' });
 });

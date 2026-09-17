@@ -21,7 +21,9 @@ function setup() {
   vm.runtime.setWindow(S, W);
   const tools = memoryTools(vm.runtime, { defineTool: (o) => o });
   const byName = new Map(tools.map((t) => [t.name, t]));
-  const exec = { session: { id: S } };
+  // 形状必须与真实宿主一致：ToolExecutionInput 只有 agent（没有 session）；
+  // 早期测试喂的是 { session } —— 宿主永远不会产生的形状，因此漏掉了真 bug。
+  const exec = { agent: { session: { id: S } } };
   return { vm, tools, byName, exec, budgets: deriveBudgets(vm.config, W) };
 }
 

@@ -427,6 +427,19 @@ system_note
 state_delta
 ```
 
+`event_type` 的判定必须区分**真实用户输入**与**宿主注入的合成上下文**（v1.3 真机实测补充）：
+
+- 宿主会把自身注入的内容也以 user 角色写进 surface —— 实测到的有
+  `Current runtime context` 快照（单条 361 至 28,000+ token 不等）与
+  `<system-reminder>` 技能目录（845 token，其 `source.kind` 为 `skill-catalog`）。
+- 判定方向 MUST 是**反的**：只有 `source.kind === 'user'` 才算 `user_message`，
+  **任何其它 kind 一律记为 `system_note`**。MUST NOT 用白名单（只认已知 kind），
+  因为宿主的 kind 词汇表是 merge-extensible 的，插件可自行登记新 kind，白名单必然落后。
+- 缺 `source.kind` 时按 `user_message` 处理（手搓/旧版事件的兼容面）。
+- 两条都必须入索引（与宿主日志一致、可追溯），差别在 authority 与优先级：
+  `system_note` 的 source_authority 为 0.6 而 user 指令为 1.0（§16.1），
+  否则 1,206 token 的宿主样板会以最高权威挤占只有 0.135W 的 recent verbatim 预算。
+
 MUST：
 
 - 原始 `content` 不因任何 compact 操作修改。
