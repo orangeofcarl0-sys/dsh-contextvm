@@ -277,6 +277,22 @@ test('工具注册：注入 defineTool 后注册全部工具（§13.2 + §8.3 + 
     const r2 = s2.registerTool(undefined);
     assert.deepEqual(r2.registered, []);
     assert.ok(s2.warnings.some((w) => w.includes('文本 JSON 路径')));
+
+    // 契约：registerTool 必须**自己**回传本次告警。真机上调用方读的是 r.warnings，
+    // 而它当时不存在 → 每次挂载都抛 "r.warnings is not iterable"，被 catch 吞成
+    // "工具未注册"，于是即使 8 个工具全部注册成功也照样报降级。诊断说谎比没有诊断更坏。
+    assert.ok(Array.isArray(r2.warnings), 'registerTool 必须回传 warnings 数组');
+    assert.equal(r2.warnings.length, 1, '本次调用的告警应恰好一条');
+    assert.ok(r2.warnings[0].includes('文本 JSON 路径'));
+
+    const vm3 = makeVm();
+    const c3 = fakeCtx();
+    const s3 = applySeams(c3.ctx, vm3, {});
+    const r3 = s3.registerTool((def) => def);
+    assert.deepEqual(r3.warnings, [], '注册成功时不应有本次告警');
+    assert.equal(r3.registered.length, 8, '成功路径应报满 8 个工具');
+    assert.equal(s3.warnings.length, 0, '成功路径不应往全局 warnings 里塞东西');
+    vm3.close();
     vm2.close();
   } finally {
     vm.close();

@@ -3,7 +3,7 @@
 逐条对照规范 §29 的 14 项完成条件，给出**可复跑的**证据。命令统一为：
 
 ```bash
-npm test                        # 180 项审计与验收测试
+npm test                        # 188 项审计与验收测试
 npm run audit:host              # 宿主契约实机审计（需本机安装 DSH）
 node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 ```
@@ -51,7 +51,7 @@ node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 插件装入 `headless` profile 的 node_modules，用一次性叠加层插入（与 `_probe-surface.yml` 同约定），
 `--dump-config` 先确认补丁合成，再跑真实一轮。证据：
 
-- 插件随宿主启动成功，`D:/dsh/_scratch/cvm-audit.db` 被建立（167KB）；
+- 插件随宿主启动成功，探针指定的 `dbPath`（`$DSH_HOME/_scratch/cvm-audit.db`）被建立（167KB）；
 - 迁移 v1 应用，11 张表建成（raw_events / raw_fts 及其影子表 / state_items / episodes / artifacts / kv）；
 - 真实会话事件被镜像入索引且 FTS 行数一致；`episodes` 出现 1 条（轮末缝确实跑了）。
 
@@ -72,6 +72,34 @@ node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 
 新加的守卫都用"故意植入原缺陷"验证过确实会失败（D 段重现了实机那条错误原文，
 C 段与隐私守卫同样验证），避免"看起来在检查、实际永远通过"。
+
+## 补充：交互审计 —— 用户能不能方便地用（2026-09-17）
+
+前三层回答的是"插件能不能在真机上跑对"，这一层回答"人能不能装、能不能看出它在工作"。
+走的是**用户路径**（`dsh plugin add` + 直接跑，不带 patch、不带配置），不是开发者路径。
+抓到 7 个问题，其中 2 个是会让用户直接失去核心功能的真缺陷。
+
+| # | 问题 | 用户会看到什么 | 修法 |
+|---|---|---|---|
+| 1 | **零配置不落盘**：`opts.dbPath ?? config.dbPath ?? ':memory:'`，而默认配置就是 `dbPath: null` → `null ?? ':memory:'` 得到内存库 | 文档推荐的零配置用法**重启即丢失全部状态**（authoritative state / episode 摘要 / artifact 都来自模型 delta，无法从宿主 session log 重建） | `null` 与 `undefined` 都走 `defaultDbPath()`；`':memory:'` 需显式写。`interaction.test.mjs` 覆盖 |
+| 2 | **诊断说谎**：调用方读 `r.warnings`，而 `registerTool` 只返回 `{registered}` → 每次挂载抛 `r.warnings is not iterable`，被 catch 吞成"未注册状态提交工具" | 8 个工具**全部注册成功**，日志却报降级。诊断说谎比没有诊断更坏 | `registerTool` 回传**本次**新增的 warnings；补契约测试（含成功路径不得有告警的阳性对照） |
+| 3 | **人对插件完全不可见**：工具面向模型、遥测只在内存、`ctx.logger` 在 headless 与 web 都不落任何用户可读的地方（同一次运行里其他插件用 `console` 打的日志出现在 `web-latest.err.log` 与 headless 的 stderr） | 装完了不知道有没有生效、库在哪、注入有没有发生 | 诊断走 **stderr** 并带 `[contextvm]` 前缀（不用 stdout：headless 把 stdout 当"最终回答"的通道）；挂载时打印库路径与工具数；新增 **`/contextvm`** 命令 |
+| 4 | **待处理队列跨会话卡死**：队列是全局的且现在真的持久化，上一进程遗留的条目会在下次运行被取出，而其会话已结束 → `window()` 按设计抛错 → `flushPendingDeltas` 整体抛出，连 `kvSet(remain)` 都到不了 | "第一次失败之后，状态就再也不更新了"（当前会话的 delta 永远排不上队） | `prunePending()` 剪掉"会话已结束 / 重试超限"的条目并如实上报 + 每条**独立容错** + 重试上限 5 次。3 个新测试在注入原缺陷后**全部失败**（变异测试验证） |
+| 5 | delta 反复 `unparseable` | 状态长期不积累 | 真相不是解析器：union-alpha **偶发返回完全空的响应**（实测 683ms、`text_chars:0`、无 tool call、无 usage、`stopReason` 为 null），重试后 7.8s 返回 70 字符并成功应用。遥测加 `text_chars` 以区分"模型什么都没回"与"回了非 JSON" |
+| 6 | `编译统计: 0 次（）` | 空括号，像是渲染坏了 | `by_mode` 为空时不渲染括号；加断言禁止空括号 |
+| 7 | `待处理状态增量: 1 条` 不解释来源 | 非零数字让人以为卡住了 | 标明其中多少条属于**已结束的会话**（下次维护清理，raw 事件仍可检索） |
+
+两条与安装方式有关的实地结论：
+
+- `dsh plugin --profile headless add "github:orangeofcarl0-sys/dsh-contextvm"` **一条命令可用**（13.4s），
+  宿主会自动把本包登记进该 profile 的 `dsh.profile.bundles`；
+- 因此**不要**再用 `--patch` 以 `insert` 方式插同一个 id —— 宿主报
+  `duplicate loader entry id: dsh-contextvm` 并拒绝启动插件树。二者二选一（已写入 README）。
+
+另外记一条宿主的边界，以免下次误判为插件缺陷：`headless` 是"回答一个任务就退出"的
+一次性应用，它把参数当提示词，**不**解析 `/contextvm` 这类斜杠命令（实测该字符串被原样发给模型，
+模型于是自己去读仓库、跑测试并汇报）。命令入口属于 `tui` / `web` 这类交互 profile；
+`/contextvm` 的注册在本机有真机证据 —— 挂载日志那行只在 `commands.register` 未抛错时才打印。
 
 ## 补充：本轮结构优化（代码审计驱动）
 
@@ -116,6 +144,8 @@ C 段与隐私守卫同样验证），避免"看起来在检查、实际永远�
    失败自动转 degraded。摘要检索承担了"换个说法也能召回"的主要收益，零额外依赖。
 3. **artifact 正文字节读取**：规范 §4.4 要求"用 artifact/version 而不是把整个对象塞进 state"，
    本实现存引用与摘要并暴露 uri；读取工作区文件属宿主文件能力，插件不越界（`fetch_artifact` 的返回里明确说明）。
-4. **真实 DSH 进程内运行**：本环境无宿主进程，全部验证走假宿主（含端到端启动冒烟
-   `boot.smoke.test.mjs`：apply → 五条宿主缝 → 编译 → delta → episode → 维护 → 拆解）。
-   宿主包 `@deepseek-ai/dsh-tools` 可解析时会注册 8 个工具，本环境走的是降级路径，两条路径均有测试覆盖。
+4. ~~**真实 DSH 进程内运行**~~（**已实现，保留此条仅为记录**）：本机已有 DSH，
+   实机审计见上文"实机测试审计"与"交互审计"两节 —— 插件在真实 `headless` profile 中加载、
+   8 个工具经宿主真 `defineTool` 注册成功、真实会话事件被镜像入索引、delta 抽取与应用跑通。
+   假宿主测试仍是日常回归的主力（`boot.smoke.test.mjs`：apply → 五条宿主缝 → 编译 → delta →
+   episode → 维护 → 拆解），因为 CI 环境没有宿主进程。

@@ -18,12 +18,42 @@
 
 ## 安装与启用
 
+一条命令即可（已在真机验证，13.4s 完成，宿主会自动把本包登记进该 profile 的
+`dsh.profile.bundles`）：
+
+```bash
+dsh plugin --profile <profile> add "github:orangeofcarl0-sys/dsh-contextvm"
+```
+
+也可以手动放置：
+
 1. 把本包放进 profile 的 `node_modules`（或作为依赖安装），使其可被 `dsh.bundle.patch` 解析。
 2. 宿主会自动消费 [cordis.patch.yml](./cordis.patch.yml) 完成挂载。该文件**只**声明
    `dbPath` 与 `route`；预算比例、输出上限等一律由 `lib/app/config.js` 的 `DEFAULTS` 提供
    （单一定义处，避免两处默认值漂移）。
 3. `route.provider` 必须与 `settings.yaml` 中已注册的 provider 路由键一致
    （当前基线为 `openrouter-stealth` / `stealth/union-alpha`）。
+
+**零配置即可用**，且**默认会真的落盘**到 `$DSH_HOME/contextvm/contextvm.db`
+（`DSH_HOME` 缺省为 `~/.dsh`）。只有显式写 `dbPath: ':memory:'` 才是内存库。
+
+> 注意：安装成 bundle 之后**不要**再用 `--patch` 以 `insert` 方式插同一个 id，
+> 宿主会报 `duplicate loader entry id` 并拒绝启动插件树。需要覆盖配置时，
+> 在 profile 自己的 `cordis.patch.yml` 里按 id 写 `config` 段。
+
+## 怎么知道它在工作
+
+插件把诊断写到 **stderr**（不用 stdout：headless 把 stdout 当"最终回答"的通道，
+写那里会污染结果），每行带 `[contextvm]` 前缀。挂载时三行即可回答最常见的问题：
+
+```
+[contextvm] 已挂载 · schema v1 · 命令 /contextvm
+[contextvm] 库: /home/you/.dsh/contextvm/contextvm.db
+[contextvm] 已注册 8 个工具：contextvm_commit_state, contextvm_exhaustive_scan, search_memory, ...
+```
+
+会话内输入 **`/contextvm`** 可随时查看当前窗口与预算、索引与状态规模、待处理增量、
+语义索引状态、容量拒绝计数等（该命令取不到项时写"未知"，自身绝不抛错）。
 
 ## 运行时要求
 
@@ -53,7 +83,7 @@ ratios:
 ## 测试
 
 ```bash
-npm test                # 全部审计与验收测试（180 项，默认串行）
+npm test                # 全部审计与验收测试（188 项，默认串行）
 npm run test:parallel   # 同上但并行（更快，供快速迭代）
 npm run test:acceptance # 只跑 1M 语料与 Phase A 验收
 npm run audit:host      # 宿主契约实机审计（需本机安装 DSH；核对接口、工具 schema、文档化参数）
@@ -130,16 +160,24 @@ tools/                  代码审计（code-audit.mjs / dead-code-check.mjs）
 （工具定义能否被真 `defineTool` 编译、调用的成员是否真实存在、有无已知的错误访问、
 提示词文档化的调用参数能否通过宿主编译后的 schema）。
 
-在真实 DSH 进程里跑一轮的做法（与 `_probe-surface.yml` 同约定）：
+在真实 DSH 进程里跑一轮：
 
 ```bash
-# 1. 把插件放进 profile 的 node_modules（只拷运行面）
+# 最贴近用户的路径：按安装方式装好，直接跑（无 patch、无配置）
+dsh plugin --profile headless add "github:orangeofcarl0-sys/dsh-contextvm"
+dsh --profile headless "只回复两个字：收到。不要调用任何工具。"
+# 看 stderr 里的 [contextvm] 行；再看 $DSH_HOME/contextvm/contextvm.db 是否落盘且体积增长
+
+# 只想临时试、不改 profile 时，用一次性叠加层插入（insert 同一个 id）
 cp -r lib package.json cordis.patch.yml "$DSH_HOME/profiles/headless/node_modules/dsh-contextvm/"
-# 2. 用一次性叠加层插入（参考仓库外同级目录的 _probe-contextvm.yml）
 dsh --profile headless --patch _probe-contextvm.yml --dump-config   # 先确认补丁合成
 dsh --profile headless --patch _probe-contextvm.yml "调用 contextvm_commit_state，把返回原文贴出来"
-# 3. 检查插件自建库：$DSH_HOME/contextvm/contextvm.db（或配置的 dbPath）
 ```
+
+`--patch insert` 与"已装成 bundle"互斥（会 `duplicate loader entry id`）：二选一。
+
+提示：`headless` 是"回答一个任务就退出"的一次性应用，它把参数当提示词，
+**不**解析 `/contextvm` 这类斜杠命令；命令入口属于 `tui` / `web` 这类交互 profile。
 
 ## 完成度
 

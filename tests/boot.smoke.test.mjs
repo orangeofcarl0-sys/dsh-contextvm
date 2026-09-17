@@ -73,7 +73,7 @@ function makeHost() {
 
 test('启动冒烟：apply 装配成功、注册两个工具、五条缝全部挂上', async () => {
   const host = makeHost();
-  const plugin = apply(host.ctx, {});
+  const plugin = apply(host.ctx, { dbPath: ':memory:' });
 
   // 等异步的工具解析/注册完成（宿主包在本环境不可解析，故应走降级路径）
   await new Promise((r) => setTimeout(r, 30));
@@ -92,7 +92,7 @@ test('启动冒烟：apply 装配成功、注册两个工具、五条缝全部�
 
 test('启动冒烟：完整走一轮（镜像 → 注入 → delta → episode → 维护）', async () => {
   const host = makeHost();
-  const plugin = apply(host.ctx, {});
+  const plugin = apply(host.ctx, { dbPath: ':memory:' });
   const { vm } = plugin;
   await new Promise((r) => setTimeout(r, 20));
 
@@ -155,7 +155,7 @@ test('启动冒烟：完整走一轮（镜像 → 注入 → delta → episode �
 test('启动冒烟：配置不变量失败时 apply 抛错（拒绝启动，不静默兜底）', () => {
   const host = makeHost();
   assert.throws(
-    () => apply(host.ctx, { ratios: { heavy_target_input: 0.1 } }),
+    () => apply(host.ctx, { dbPath: ':memory:', ratios: { heavy_target_input: 0.1 } }),
     /配置不变量校验失败/,
   );
 });
