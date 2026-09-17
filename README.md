@@ -63,6 +63,11 @@ dsh plugin --profile <profile> add "github:orangeofcarl0-sys/dsh-contextvm"
 真机实测这些样板曾占某会话镜像内容的 98%，使注入的 5860 token 中只有 31 token 是真正的
 权威状态；修正后同一会话降到 **188 token**，且全部是真实内容。
 
+**状态只记"真正谈过的内容"。** 宿主每轮自带的环境信息（文件沙箱策略、审批策略、技能目录）
+不会被记成项目事实——真机上模型曾把它们记下来，来源指向宿主快照，再当作权威事实注入回来。
+现在这类来源会被状态写入直接拒绝（提示词层面的劝阻只是辅助，校验才是保证）。
+`next_action` 也用稳定 key 落库并带 provenance，任何时候只保留一条。
+
 会话内输入 **`/contextvm`** 可随时查看当前窗口与预算、索引与状态规模、待处理增量、
 语义索引状态、容量拒绝计数等（该命令取不到项时写"未知"，自身绝不抛错）。
 
@@ -107,7 +112,7 @@ ratios:
 ## 测试
 
 ```bash
-npm test                # 全部审计与验收测试（199 项，默认串行）
+npm test                # 全部审计与验收测试（203 项，默认串行）
 npm run test:parallel   # 同上但并行（更快，供快速迭代）
 npm run test:acceptance # 只跑 1M 语料与 Phase A 验收
 npm run audit:host      # 宿主契约实机审计（需本机安装 DSH；核对接口、工具 schema、文档化参数）

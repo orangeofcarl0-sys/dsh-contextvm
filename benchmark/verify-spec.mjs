@@ -34,6 +34,15 @@ const specCaps = [
   ['episode.summary_target_tokens', DEFAULTS.episode.summary_target_tokens],
   ['episode.summary_hard_max_tokens', DEFAULTS.episode.summary_hard_max_tokens],
 ];
+// §17.1 有两个陈述处（摘要块与 absolute 清单），二者 MUST 一致。
+// 这条守卫是被真机审计逼出来的：摘要块曾长期停在旧值（soft 500 / hard 800 /
+// EPISODE_SUMMARY_MAX 1600 / GLOBAL_WORKER_MAX_OUTPUT 300），而下面的逐项核对只认
+// absolute 清单的格式，于是"规范自己跟自己不一致"整整漏过一轮。
+console.log('\n=== 规范 §17.1 陈旧数值（摘要块）===');
+for (const stale of ['soft 500', 'hard 800', 'EPISODE_SUMMARY_MAX       = 1600', 'GLOBAL_WORKER_MAX_OUTPUT  = 300', 'STATE_DELTA_TARGET_OUTPUT']) {
+  check(`不得残留陈旧写法「${stale}」`, !s.includes(stale));
+}
+
 console.log('\n=== 规范 §17.1 输出上限 vs 实现 DEFAULTS ===');
 for (const [key, value] of specCaps) {
   check(`${key} = ${value} 在规范中一致`, new RegExp(`${key.replace('.', '\\.')}:\\s*${value}\\b`).test(s));
@@ -46,6 +55,13 @@ check('规范规定宿主托管上下文 MUST NOT 进 recent/候选/邻居', /MU
 check('规范规定判定唯一实现', /lib\/core\/injectability\.js/.test(s));
 const injPath = path.resolve(import.meta.dirname, '..', 'lib', 'core', 'injectability.js');
 check('判定模块存在（唯一实现处）', fs.existsSync(injPath));
+
+// 状态写入侧（§5.2.1）：规范必须写明 next_action 的三条落库语义与宿主来源拒绝
+check('规范含 §5.2.1 next_action 落库语义', /### 5\.2\.1 `next_action` 的落库语义/.test(s));
+check('规范要求 next_action 用稳定 key', /MUST 用固定 key/.test(s));
+check('规范要求无来源即拒收', /next_action_without_source/.test(s));
+check('规范要求拒绝宿主样板来源的 upsert', /source_is_host_context/.test(s));
+check('规范指出验收语料必须覆盖 next_action', /验收语料 MUST 覆盖 `next_action` 路径/.test(s));
 
 const pf = 1.693;
 check('预检断言 ratio*cap <= 0.98', pf * r.cap <= 0.98, `${(pf * r.cap).toFixed(3)}`);

@@ -57,7 +57,9 @@ function buildHistory(vm, { targetTokens }) {
 }
 
 test('Phase A 验收：0.19W–0.38W 历史下稳定工作', async () => {
-  const llm = fakeLlm([{ text: '{"upsert":[],"supersede":[],"resolve":[],"open":[],"next_action":null}' }]);
+  // next_action 给非 null 值：真机上它曾以 key:null + 无来源落成 active，
+  // 使 §24.3 的 provenance 断言失效。语料不含它时该断言是空转的。
+  const llm = fakeLlm([{ text: '{"upsert":[],"supersede":[],"resolve":[],"open":[],"next_action":"先复核 B 方案"}' }]);
   const vm = createContextVm({ rawConfig: {}, dbPath: ':memory:', llm });
   const budgets = deriveBudgets(vm.config, W);
   vm.runtime.setWindow(S, W);
@@ -123,13 +125,10 @@ test('Phase A 验收：0.19W–0.38W 历史下稳定工作', async () => {
     assert.ok(typeof e.score === 'number');
   }
 
-  // ---- §24.3 provenance：active 项 100% 有来源 ----
-  assert.equal(vm.state.countWithoutProvenance(S), 0);
-
-  // ---- §24.3 上下文不超硬上限 ----
-  assert.ok(ctx.tokenCount <= budgets.hardInputCap);
-
   // ---- delta 流水线闭环 ----
+  // 这一轮的 delta **必须包含 next_action**：真机上 next_action 曾以 key:null + 无来源落成
+  // active，使下面的 §24.3 provenance 断言在真机上失效（实测 countWithoutProvenance = 2）。
+  // 语料不含 next_action 时该断言是空转的，故此处显式覆盖。
   const deltaRes = await vm.runtime.extractDelta({
     sessionId: S,
     query: '下一步做什么？',
@@ -137,6 +136,16 @@ test('Phase A 验收：0.19W–0.38W 历史下稳定工作', async () => {
     eventIds: [ids.secret],
   });
   assert.equal(deltaRes.ok, true);
+  assert.ok(
+    vm.state.active(S).some((i) => i.itemType === 'next_action'),
+    '本轮 delta 应写入 next_action（否则下面的 provenance 断言覆盖不到该路径）',
+  );
+
+  // ---- §24.3 provenance：active 项 100% 有来源（含 next_action 路径） ----
+  assert.equal(vm.state.countWithoutProvenance(S), 0);
+
+  // ---- §24.3 上下文不超硬上限 ----
+  assert.ok(ctx.tokenCount <= budgets.hardInputCap);
 
   vm.close();
 });

@@ -3,7 +3,7 @@
 逐条对照规范 §29 的 14 项完成条件，给出**可复跑的**证据。命令统一为：
 
 ```bash
-npm test                        # 199 项审计与验收测试
+npm test                        # 203 项审计与验收测试
 npm run audit:host              # 宿主契约实机审计（需本机安装 DSH）
 node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 ```
@@ -183,6 +183,36 @@ C 段与隐私守卫同样验证），避免"看起来在检查、实际永远�
 实测证明降权不够，才改成排除；随之变死的 `retrieval.host_context_penalty` 一并删除。
 
 4 项新测试均经**变异验证**（判定恒为 content / 取消邻居过滤 / 取消降权，均 FAIL）。
+
+## 补充：两个状态层缺陷（2026-09-17 续三）
+
+第二次交互测试的验证环节又挖出两个问题，都是**真机才有、假宿主测不出**的：
+
+| # | 缺陷 | 为何没被发现 | 修法 |
+|---|---|---|---|
+| 1 | **`next_action` 会累积且零 provenance**：以 `key: null`（null key 不参与版本链）＋ `sourceEventIds: []` 落库 → 每轮新增一条 active、旧版永不取代；真机实测同一句话两条，且 `countWithoutProvenance = 2`（§24.3 要求 0） | **验收语料从不包含 `next_action`**，那条 provenance 断言一直是空转的 —— 指标绿得毫无意义 | 稳定 key `current`（版本链自动取代）＋ provenance 取本轮候选事件 id（先剔除宿主托管上下文）＋ 无来源即拒收（`next_action_without_source`）＋ 自愈清理遗留的 null key 项（`next_action_replaced`）；验收语料改为**包含** `next_action`，让该断言真正覆盖此路径 |
+| 2 | **宿主样板被抽取成"项目事实"**：模型把宿主注入的运行时上下文（文件沙箱策略、审批策略）记为 durable fact，来源指向宿主快照（`kind=plugin form=snapshot`），随后又被当作权威事实注入 —— 宿主样板绕成自指环 | 注入侧排除挡不住它：它进的是**宿主的**提示词 | 在状态写入边界复用同一判定：一条 upsert/open 的来源若**全部**是宿主托管上下文或自身记账事件，MUST 被拒（`source_is_host_context`）；混引时以内容为准。提示词另加劝阻，但**结构校验才是保证** |
+
+顺带消除一处重复定义：`NEEDS_SOURCE` 列表原本在 `state_store.js` 与 `delta.js` 各有一份
+（注释写着"与 state_store 一致"），两份一旦漂移就会出现"编排层拦、存储层放行"的静默缺口。
+现由 `state_store.js` 导出唯一一份，并把 `next_action` 纳入。
+
+5 项测试在变异下全部失败（旧语义 + 取消来源拒绝 + 移除存储层强制），还原后全过。
+
+真机验证（同一用户库）：
+- 新会话：`countWithoutProvenance = 0`、`next_action` 带 content 来源且只有一条、
+  宿主样板来源的 fact **0 条**（此前 2 条）；
+- 遗留会话：`applyDelta` 自愈取代 2 条 null key 项（`next_action_replaced`），
+  `countWithoutProvenance` 由 2 回到 0；
+- 遗留污染：新增的第 5 项审计检查发现 2 条 `source_is_host_context`，开启安全修复后
+  降级为 `uncertain`（条目总数 6 不变，**未删除任何项**），该会话重新编译后
+  `Active decisions / facts` 为空、注入量 123 token。
+
+**顺带发现规范自己跟自己不一致**：§17.1 有两个陈述处（摘要块与 `absolute` 清单），
+摘要块长期停在旧值（`soft 500 / hard 800`、`EPISODE_SUMMARY_MAX 1600`、
+`GLOBAL_WORKER_MAX_OUTPUT 300`），而 verify-spec 的逐项核对只认 `absolute` 清单的格式
+—— 于是这处不一致整整漏过一轮。已对齐，并给 verify-spec 增加"陈旧写法"守卫
+（植入旧值即 3 项 FAIL）。
 
 ## 补充：本轮结构优化（代码审计驱动）
 

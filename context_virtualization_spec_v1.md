@@ -70,6 +70,14 @@
     （recent / 候选 / 邻居扩展三处都拦），判定唯一实现在 `lib/core/injectability.js`，
     且跳过数量必须可观测。同会话实测：注入 **5860 → 188 token**。
 
+22. **`next_action` 落库语义修正 + 状态写入拒绝宿主样板来源**（新增 §5.2.1，真机实测）。
+    `next_action` 曾以 `key: null`（不参与版本链）+ `sourceEventIds: []` 落库，于是每轮新增
+    一条 active、旧版永不取代，且 active 无来源 —— 真机实测 `countWithoutProvenance = 2`
+    （§24.3 要求 0），而验收语料从不含 `next_action`，该断言一直是空转的。现改为稳定 key
+    + 本轮候选事件作 provenance + 无来源即拒收 + 自愈清理遗留项。同时规定：一条 upsert 的
+    来源若全部指向宿主托管上下文或自身记账事件，MUST 被拒（`source_is_host_context`）——
+    真机上模型把宿主的文件沙箱/审批策略记成了项目事实，再当作权威注入回去，形成自指环。
+
 19. **§1.3 "不依赖 hidden CoT" 的表述细化**：目标模型**存在隐藏推理开销**（见第 16 条）。
     本系统仍 MUST NOT 依赖其内容（不读、不索引、不参与打分），但 MUST 为其预留输出预算。
     "不依赖"不等于"不会遇到"，更不等于"没有开销"。
@@ -520,6 +528,13 @@ state_delta
 - 被跳过的数量 MUST 可观测（`notes.skippedNonContent` / `notes.excludedNonContent`）——
   否则"宿主样板又混进来了"这类回归将不可见。
 
+**同一条规则也 MUST 施加在状态写入边界**：一条 upsert/open 的 `source_event_ids`
+若**全部**指向宿主托管上下文或自身记账事件，MUST 被拒（`source_is_host_context`）；
+至少有一个真实内容来源才放行（混引时以内容为准）。真机实测：模型把宿主注入的运行时上下文
+（文件沙箱策略、审批策略）当成项目事实记了下来，来源指向那份宿主快照，随后又被当作权威事实
+注入回去 —— 宿主样板绕成一个自指环。提示词层面的劝阻 MUST 只作为减少无效提交的手段，
+MUST NOT 替代这条结构校验（提示词是请求，校验才是保证）。
+
 效果（同一真实会话、同一查询）：注入量 **5860 → 188 token**，证据段 **2912 → 76 token**，
 且剩下的每一个 token 都是真实内容。
 
@@ -701,6 +716,23 @@ next_action: ...
 - hard max：`800 tokens`
 
 若模型无法可靠同时输出答案 + delta，则 MUST 使用第二个**短调用**专门生成 delta；该调用输入只包含本轮 query、answer、当前 state 的最小必要部分。
+
+### 5.2.1 `next_action` 的落库语义（v1.4 真机实测补充）
+
+`next_action` 是 delta 的顶层字段，语义是"当前唯一的下一步"。落库 MUST 满足三条：
+
+1. **稳定 key**：MUST 用固定 key（实现为 `current`），使新一版经版本链自动 supersede 旧版。
+   v1.3 的实现写的是 `key: null`，而 null key 的项**不参与版本链**（§4.2）——于是每轮新增
+   一条 active，旧版永不让位。真机实测同一句话已累积两条，并被重复注入为 `Current task`。
+2. **必须有 provenance**：来源 MUST 取本轮候选事件 id，且 MUST 先剔除宿主托管上下文与
+   自身记账事件（§4.1.1）。无可用来源时 MUST **拒收**（`next_action_without_source`），
+   MUST NOT 写一条无据的 active —— v1.3 以 `sourceEventIds: []` 落库，直接打破了 §24.3
+   的"active 项 100% 有来源"（真机实测 `countWithoutProvenance = 2`）。
+3. **自愈**：写入新版本后 MUST 把"其它 key 的 active next_action"（修复前遗留的 null key 项）
+   显式标为 superseded，理由是"当前下一步只能有一条"。
+
+> 为什么 §24.3 一直没暴露第 2 条：验收语料从不包含 `next_action`，该断言是空转的。
+> v1.4 起验收语料 MUST 覆盖 `next_action` 路径。
 
 ## 5.3 Delta 验证
 
@@ -1492,6 +1524,9 @@ explicit current user instruction
 - open question 是否实际已解决
 - artifact version 是否过期
 - dangling source refs
+- **active 项的证据是否全部来自宿主托管上下文或自身记账事件**（§4.1.1）。写入侧已拒收，
+  故命中即为修复前的遗留（真机实测：宿主的环境说明被记成了项目事实）。安全修复按既有
+  规则标 `uncertain`，使其退出 authoritative 状态 —— MUST NOT 删除。
 
 Audit 输出仍采用短 patch，不重写整个 state。
 
@@ -1504,9 +1539,9 @@ Audit 输出仍采用短 patch，不重写整个 state。
 输出上限保持**绝对值，MUST NOT 随 `W` 缩放**：
 
 ```text
-STATE_DELTA_TARGET_OUTPUT = 300     # soft 500 / hard 800
-EPISODE_SUMMARY_MAX       = 1600
-GLOBAL_WORKER_MAX_OUTPUT  = 300     # 复杂任务可放宽至 500
+STATE_DELTA_SOFT_MAX     = 3000    # hard 4000（override 也不得突破）
+EPISODE_SUMMARY_MAX      = 2400
+GLOBAL_WORKER_MAX_OUTPUT = 1000    # 复杂任务可放宽至 1500
 ```
 
 > **已删除 `ROUTER_MAX_OUTPUT` 与 `RERANKER_MAX_OUTPUT`**（v1.3 收口）。v1.0 为
