@@ -67,6 +67,10 @@ dsh plugin --profile <profile> add "github:orangeofcarl0-sys/dsh-contextvm"
 /contextvm off     # 关闭本会话
 ```
 
+> 命令必须**声明 `input`** 才会被客户端认作"带参数的命令"——否则 `/contextvm on` 这样的行
+> 会被当成普通消息发给模型（裸命令不受影响）。这是宿主契约，已写入规范 §13.2.1，
+> 并有回归测试锁住。
+
 为什么这么设计：工具 schema 会随注册进入**该 profile 下每个会话**的每个请求。实测 8 个工具的
 schema 合计约 1200–1433 token，比插件注入的上下文（82–257 token）贵一个量级，而其中 **77% 是
 JSON 结构本身**（描述只占 280、`commit_state` 的枚举只占 64）。改成按会话注册后，污染隔离是

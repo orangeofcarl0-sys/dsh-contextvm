@@ -1435,6 +1435,20 @@ v1.3 的实现把全部工具**全局注册**。真机实测的后果：这些�
 **唯一新增的用户操作就是这一次显式开启** —— 这是有意的取舍：把污染隔离做成结构性的，
 代价是一次性的一次操作，而不是每轮或每次请求的成本。
 
+命令侧还有一条宿主契约 MUST 遵守（v1.4 真机实测，客户端源码 `dsh-client-ui-commands`
+的 `matchEnter` 是"这行算不算命令"的唯一裁决处）：
+
+```js
+if (desc.input !== undefined) return { claim: leadingClaim(desc, session) };  // 声明 input → 按命令执行
+if (!bare) return undefined;                                                  // 否则带参数的行 → 当普通消息
+```
+
+即：**任何接受参数的命令 MUST 声明 `input`**（`{hint, attachments?}`），否则带参数的行会
+掉进默认通道被当作**普通消息发给模型**。本插件的 `/contextvm on` 曾因此静默失效 ——
+用户侧表现为"命令输入无反应"，实际是这行进了模型（真机上还白耗了模型调用）。
+裸命令（`/contextvm`）不受影响，因为它走 `runDetached` 分支 —— 这也是它当时能正常工作、
+从而掩盖了缺陷的原因。
+
 主回答由宿主的 agent loop 发起，本系统无权强制其 `response_format`。故 state delta 的提交 SHOULD 通过注册工具（如 `contextvm_commit_state`）实现，由注入的协议段指示模型在收尾时调用。
 
 默认契约：
