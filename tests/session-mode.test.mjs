@@ -236,3 +236,28 @@ test('命令 MUST 声明 input —— 否则 web 客户端会把带参数的行�
     vm.close();
   }
 });
+
+test('sessionMode 配置：默认休眠；显式 active 时新会话即为开启；非法值被拒', async () => {
+  const { resolveConfig } = await import('../lib/app/config.js');
+  assert.equal(resolveConfig({}).sessionMode, 'dormant', '默认 MUST 是休眠');
+  assert.equal(resolveConfig({ sessionMode: 'active' }).sessionMode, 'active');
+  assert.throws(() => resolveConfig({ sessionMode: 'on' }), /sessionMode/, '拼错必须拒绝，不得静默退回休眠');
+  assert.throws(() => resolveConfig({ sessionMode: true }), /sessionMode/);
+
+  // active 模式下，**没有显式开启记录**的会话也视为开启（无人值守长跑的前提：
+  // headless 每次都是新会话，且不解析斜杠命令，没法手敲 /contextvm on）
+  const { vm } = makeVmWithHistory();
+  const host = fakeHost(vm);
+  try {
+    const seams = applySeams(host.ctx, vm, {});
+    seams.setDefineTool((def) => def);
+    // 换成 active 配置的 vm：这里直接用 fallback 参数验证语义（同一个判定函数）
+    assert.equal(isSessionActive(vm.db, 'brand-new-session', 'active'), true);
+    assert.equal(isSessionActive(vm.db, 'brand-new-session', 'dormant'), false);
+    // 显式记录优先于默认值：off 过的会话即使默认 active 也保持关闭
+    setSessionActive(vm.db, S, false);
+    assert.equal(isSessionActive(vm.db, S, 'active'), false, '显式关闭 MUST 优先于默认值');
+  } finally {
+    vm.close();
+  }
+});
