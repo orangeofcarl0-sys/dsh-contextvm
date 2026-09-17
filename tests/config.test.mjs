@@ -205,3 +205,58 @@ test('配置键访问守卫：代码里读的每个配置键都必须在 DEFAULT
   const planted = configKeyViolations('const o = this.config.output; return o.episode_summary_hard_max_tokens;');
   assert.ok(planted.some((x) => x.includes('episode_summary_hard_max_tokens')), '守卫必须能抓到不存在的键');
 });
+
+// ---------------- 输出上限：硬上限必须真正生效 ----------------
+//
+// `maxTokensFor` 此前是 `if (override) return override` —— 调用方传多少就发多少，
+// 配置里的 `*_hard_max_tokens` 因此没有任何消费者（死字段）。上限直接决定免费慢模型上
+// 单次调用的时长（撞上限时既拿不到内容又更慢），MUST 有一处不可突破的兜底。
+
+test('输出上限：override 不得突破该 purpose 的硬上限', async () => {
+  const { LlmClient } = await import('../lib/llm/client.js');
+  const cfg = resolveConfig({});
+  const client = new LlmClient({
+    config: cfg,
+    route: cfg.route,
+    llm: { async complete() { return { text: '{}', toolCalls: [] }; } },
+    tokenizer: { estimate: () => 1, recordUsage() {} },
+    onTelemetry: () => {},
+  });
+
+  // 默认值就是 soft 上限
+  assert.equal(client.maxTokensFor('state_delta'), cfg.output.state_delta_soft_max_tokens);
+  assert.equal(client.maxTokensFor('global_worker'), cfg.output.global_worker_output_max_tokens);
+  assert.equal(client.maxTokensFor('episode_summary'), cfg.episode.summary_hard_max_tokens);
+
+  // 小于硬上限的 override 原样放行
+  assert.equal(client.maxTokensFor('state_delta', 700), 700);
+  // 超过硬上限的 override 被夹取
+  assert.equal(
+    client.maxTokensFor('state_delta', 999999),
+    cfg.output.state_delta_hard_max_tokens,
+    'override 突破硬上限时必须夹取',
+  );
+  assert.equal(
+    client.maxTokensFor('global_worker', 999999),
+    cfg.output.global_worker_output_complex_max_tokens,
+  );
+  // 无硬上限的 purpose 不夹取
+  assert.equal(client.maxTokensFor('unknown_purpose', 999999), 999999);
+});
+
+test('输出上限：上限必须覆盖隐藏推理开销（真机实测的取值依据）', () => {
+  const cfg = resolveConfig({});
+  // 真机实测：同一任务、同样只产出一小段 JSON，output_tokens 却在 26–1658 之间波动
+  // （差额全是隐藏推理开销）。1658 这一例已经超过曾经采用的 1500 上限 —— 即那个值
+  // 对真实 workload 本来就不够。上限 MUST 高于实测峰值并留出余量。
+  const OBSERVED_MAX_OUTPUT_TOKENS = 1658;
+  const OBSERVED_HIDDEN_OVERHEAD = 460;
+  assert.ok(
+    cfg.output.state_delta_soft_max_tokens >= OBSERVED_MAX_OUTPUT_TOKENS * 1.5,
+    `delta 上限 ${cfg.output.state_delta_soft_max_tokens} 应高于实测峰值 ${OBSERVED_MAX_OUTPUT_TOKENS} 并留余量`,
+  );
+  assert.ok(cfg.output.state_delta_hard_max_tokens > cfg.output.state_delta_soft_max_tokens, '硬上限应高于 soft');
+  // worker 上限同理：300 会被隐藏推理吃光，使 GLOBAL 扫描静默返回空 findings
+  assert.ok(cfg.output.global_worker_output_max_tokens > OBSERVED_HIDDEN_OVERHEAD * 2);
+  assert.ok(cfg.output.global_worker_output_complex_max_tokens >= cfg.output.global_worker_output_max_tokens);
+});

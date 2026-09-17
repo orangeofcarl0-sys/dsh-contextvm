@@ -3,7 +3,7 @@
 逐条对照规范 §29 的 14 项完成条件，给出**可复跑的**证据。命令统一为：
 
 ```bash
-npm test                        # 193 项审计与验收测试
+npm test                        # 195 项审计与验收测试
 npm run audit:host              # 宿主契约实机审计（需本机安装 DSH）
 node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 ```
@@ -108,7 +108,7 @@ C 段与隐私守卫同样验证），避免"看起来在检查、实际永远�
 
 | # | 缺陷 | 为何一直没被发现 | 修法 |
 |---|---|---|---|
-| 1 | **输出预算被推理耗尽**：目标模型回传推理，推理计入输出上限。`max_tokens=500` 时实测 `output_tokens=500`、正文 **0 字**、`finish=max-tokens` —— delta 永远抽不出内容 | 假宿主不产生推理；"unparseable" 的命名把成因指向了错误的解析器 | 上限提到覆盖"推理开销 + 目标正文"：`state_delta` 500/800 → **1500/2000**、worker 300/500 → **1000/1500**、摘要 1600 → **2400**。实测同一任务两次成功（用量 316/672），**耗时从 17s 降到 4.2s** |
+| 1 | **输出预算被隐藏推理耗尽**：目标模型有一部分生成既不流式送出、也不计入 `reasoning_tokens`，却计入 `output_tokens`（实测差额 300–1658，方差大）。`max_tokens=500` 时整份预算被吃光：正文 **0 字**、`finish=max-tokens`、流里只剩 `usage`+`finish` —— delta 永远抽不出内容 | 假宿主不产生推理；§2.1.1 曾把"看不见 CoT"读成"没有推理开销"；"unparseable" 的命名把成因指向了错误的解析器 | 上限改为覆盖"隐藏推理开销 + 目标正文"并留方差余量：`state_delta` 500/800 → **3000/4000**、worker 300/500 → **1000/1500**、摘要 1600 → **2400**。上游 `max_completion_tokens=131072`、`default_parameters` 为空，小上限纯属本项目假设所致 |
 | 2 | **工具调用参数恒为空**：适配器读 `chunk.argumentsText`，宿主给的是 **`argumentsDelta`** | 假宿主是我自己写的，喂的正是我臆想的字段名 —— 测试通过得毫无意义 | 按宿主类型声明改用 `argumentsDelta`，并加**反向守卫**（代码里出现 `argumentsText` / `block-stop` / `case 'done'` 即 FAIL）与**正向守卫**（适配器必须按宿主词汇取值） |
 | 3 | **用量与结束原因恒为 null**：`usage` 与 `finish` 是**独立 chunk 类型**，我假设它们挂在某个 `done` 上；且 `TokenUsage` 字段是 camelCase（`inputTokens`），我读的是 `input_tokens` | 同上：假宿主按我的臆想实现。代价是 §9.6 的真实 usage 标定从未拿到过数据 | 显式处理 `usage` / `finish`；端口对外统一 snake_case，**转换只在 `lib/host/llm.js` 一处** |
 | 4 | **读了一个不存在的配置键**：`maxTokensFor('episode_summary')` 读 `output.episode_summary_hard_max_tokens`，而该键在实现里叫 `episode.summary_hard_max_tokens` → 返回 `undefined` | "跑得通"的测试不会暴露 undefined 上限 | 改为读 `episode.summary_hard_max_tokens`；删除死配置 `global_scan.worker_output_max_tokens`；新增**配置键访问守卫**测试（代码里读的每个配置键都必须在 `DEFAULTS` 中存在） |
@@ -129,6 +129,11 @@ C 段与隐私守卫同样验证），避免"看起来在检查、实际永远�
 同一处还发现：**挂载期探测配置的回退路由会打出假警报**（挂载时适配器尚未注册，
 `resolveModelInfo` 抛 `no adapter registered for provider ...`，而同一路由在会话期解析正常），
 故该探测已撤除，改为在真实路由首次解析时逐路由记录窗口与档位。
+
+`maxTokensFor` 也修了一处同类问题：它此前是 `if (override) return override` ——
+调用方传多少就发多少，配置里的 `*_hard_max_tokens` **没有任何消费者**（与已删的
+`global_scan.worker_output_max_tokens` 同类死字段）。现改为 `min(请求值, 硬上限)`，
+并删除从未被提示词或代码表达过的 `state_delta_target_tokens`。
 
 两个守卫都做了**变异验证**：植入 `argumentsText` + `input_tokens` 后 B/C 段同时 FAIL；
 植入错键名后配置键守卫 FAIL。其中配置键守卫的第一版还自带一个 bug ——

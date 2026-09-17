@@ -86,17 +86,23 @@ ratios:
 启动时会校验 §19.1 的全部不变量（偏序、组件上界之和、预检系数等），
 **任一条失败即拒绝启动**并指出具体条目，不会用默认值静默继续。
 
-**辅助调用的输出上限（`output.*`）要覆盖"推理开销 + 目标正文"**：目标模型会回传推理，
-而推理计入输出上限。真机实测 `max_tokens=500` 时用量恰好 500、正文 0 字、`finish=max-tokens`
-—— 状态抽取因此永远拿不到内容（表现为"插件在跑但状态从不积累"）。默认值已按实测上调；
-若你换到推理更长的模型，优先调大 `output.state_delta_soft_max_tokens` 与
-`output.global_worker_output_max_tokens`。撞上限时插件会打出 `delta_budget_exhausted` 并直接
-指出该调哪一项（这种失败重试无用，故不入队）。
+**辅助调用的输出上限（`output.*`）要覆盖"隐藏推理开销 + 目标正文"**：目标模型有一部分
+生成**既不流式送出、也不在 `reasoning_tokens` 里报告，却计入 `output_tokens`**（实测差额
+300–1658 token，方差很大）。真机实测 `max_tokens=500` 时整份预算被它吃光：正文 0 字、`finish=max-tokens`、
+流里只剩 `usage`+`finish` 两个 chunk —— 状态抽取因此永远拿不到内容（表现为"插件在跑但状态
+从不积累"）。
+
+注意这**不是上游限制**：上游 `top_provider.max_completion_tokens = 131072`，
+`default_parameters` 为空，没有任何外部约束要求几百 token 的上限。默认值已按实测上调
+（`state_delta` 3000，硬上限 4000）；若你换到推理开销更大的模型，优先调大
+`output.state_delta_soft_max_tokens` 与 `output.global_worker_output_max_tokens`。
+`*_hard_max_tokens` 是**不可被 override 突破**的兜底。撞上限时插件会打出
+`delta_budget_exhausted` 并直接指出该调哪一项（这种失败重试无用，故不入队）。
 
 ## 测试
 
 ```bash
-npm test                # 全部审计与验收测试（193 项，默认串行）
+npm test                # 全部审计与验收测试（195 项，默认串行）
 npm run test:parallel   # 同上但并行（更快，供快速迭代）
 npm run test:acceptance # 只跑 1M 语料与 Phase A 验收
 npm run audit:host      # 宿主契约实机审计（需本机安装 DSH；核对接口、工具 schema、文档化参数）

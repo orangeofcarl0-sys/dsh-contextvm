@@ -39,13 +39,18 @@
 
 ## v1.4 变更摘要（相对 v1.3）
 
-16. **目标模型会回传推理，且推理计入输出上限**（真机实测，影响 §1.3 / §2.1.1 / §17.1）。
-    实测：`max_tokens=500` 时 `output_tokens` 恰好 500、正文 0 字、`finish=max-tokens` ——
-    输出预算被推理吃光，`state_delta` 永远抽不出内容（表现为"插件在跑，但状态从不积累"）。
-    上限提到 2000 后，同一任务两次都成功（用量 316 / 672），且**耗时从 17s 降到 4.2s**（不再撞上限）。
-    据此：`state_delta` 上限 500/800 → **1500/2000**；worker 300/500 → **1000/1500**；
-    episode 摘要上限 1600 → **2400**。辅助调用上限的判定原则由"够写答案"改为
-    **MUST 覆盖「推理开销 + 目标正文」**。
+16. **目标模型有"隐藏推理开销"，且计入输出上限**（真机实测，影响 §1.3 / §2.1.1 / §17.1）。
+    实测：一次成功调用的 `output_tokens=483` 而可见正文仅 70 字符（≈26 token），
+    差额是**既不作为 `reasoning-delta` 流式送出、也不在 `reasoning_tokens` 里单独报告**的生成，
+    且**方差很大**（实测样本 300–1658，同一任务、同样只产出一小段 JSON）；`max_tokens=500` 时整份预算被它吃光 —— 正文 0 字、
+    `finish=max-tokens`、流里只剩 `usage`+`finish` 两个 chunk，`state_delta` 永远抽不出内容
+    （表现为"插件在跑，但状态从不积累"）。上限放大后同一任务稳定成功，且**耗时反而更低**
+    （17s 空手而归 vs 4.2s 成功）。据此：`state_delta` 上限 500/800 → **3000/4000**；
+    worker 300/500 → **1000/1500**；episode 摘要上限 1600 → **2400**。判定原则由"够写答案"
+    改为 **MUST 覆盖「隐藏推理开销 + 目标正文」并留出方差余量**。
+    **小上限不是上游要求**：上游 `top_provider.max_completion_tokens = 131072`，
+    `default_parameters` 为空（2026-09-17 复核），不存在任何外部约束要求几百 token 的上限 ——
+    那纯属本项目按"该模型没有推理开销"的假设所定。
 17. **输出上限的命名与落点统一**（消除"规范一个名、实现另一个名"）：v1.3 清单里的
     `episode_summary_target_tokens` / `episode_summary_hard_max_tokens` 在实现中位于
     `episode.summary_target_tokens` / `episode.summary_hard_max_tokens`，而取上限的代码曾按
@@ -57,9 +62,16 @@
     `TokenUsage` 字段为 camelCase、块结束是 `block-end`）。v1.3 的实现凭猜测写了
     `argumentsText` / `done` / `block-stop` / `input_tokens`，导致工具调用的参数恒为空、
     用量与结束原因恒为 null —— 且**全部静默**。
-19. **§1.3 "不依赖 hidden CoT" 的表述细化**：目标模型**可能**回传推理。本系统仍 MUST NOT
-    依赖其内容（一律丢弃、不进索引、不参与打分），但 MUST 为其预留输出预算（见第 16 条）。
-    "不依赖"不等于"不会遇到"。
+19. **§1.3 "不依赖 hidden CoT" 的表述细化**：目标模型**存在隐藏推理开销**（见第 16 条）。
+    本系统仍 MUST NOT 依赖其内容（不读、不索引、不参与打分），但 MUST 为其预留输出预算。
+    "不依赖"不等于"不会遇到"，更不等于"没有开销"。
+
+20. **`hard_max` 上限真正生效，并删除死字段**：`maxTokensFor` 此前是
+    `if (override) return override` —— 任何调用方传什么就发什么，配置里的
+    `state_delta_hard_max_tokens` **没有任何消费者**（与已删的
+    `global_scan.worker_output_max_tokens` 同类）。现改为
+    `min(请求值, 该 purpose 的硬上限)`；同时删除 `state_delta_target_tokens` ——
+    该字段从未被提示词或代码表达过（提示词只说"只输出 JSON"，没有 token 目标）。
 
 未改变的核心原则：raw 永不删、state 版本化、provenance 强制、GLOBAL 完整覆盖、不依赖 hidden CoT。
 
@@ -169,8 +181,10 @@ V1 MUST NOT：
 
 - 修改模型权重、RoPE、YaRN 或 position embedding。
 - 试图恢复、推断或持久化隐藏 CoT。
-  注意（v1.4 澄清）：目标模型**可能回传推理**，"不依赖"不等于"不会遇到"。推理一律丢弃、
-  不进索引、不参与打分；但**必须为其预留输出预算**（§17.1、§21.7.1），否则正文会被挤空。
+  注意（v1.4 澄清）：目标模型存在**隐藏推理开销** —— 这部分生成既不流式送出、也不在
+  `reasoning_tokens` 里报告，但**计入 `output_tokens`**（实测差额 300–1658，方差很大）。
+  "不依赖"不等于"不会遇到"，更不等于"没有开销"：本系统不读它、不索引它、不参与打分，
+  但**必须为其预留输出预算**（§17.1、§21.7.1），否则正文会被挤空。
 - 把生成式 summary 视为最终真相源。
 - 每轮调用都重新总结全部历史。
 - 仅依赖向量数据库作为长期记忆。
@@ -220,6 +234,12 @@ V1 MUST NOT：
 | `response_format: {type: json_object}` | 支持 | ✅ **可用**，返回合法 JSON |
 | `response_format: {type: json_schema, strict}` | 支持 | ❌ **稳定失败**，HTTP 400（两次复测均 400，0.4s 内即返回，属校验拒绝而非超时） |
 | 可见 CoT | — | ❌ 无。但注意：`message.reasoning` **字段始终存在且为 `null`**（`completion_tokens_details.reasoning_tokens: 0`）。代码 MUST 做空值判断，MUST NOT 假设该字段缺失 |
+
+**v1.4 重要修正**：上表"可见 CoT ❌ 无"与 `reasoning_tokens: 0` 是**接口自述与响应字段的实情**，
+但 MUST NOT 由此推出"该模型没有推理开销"。真机实测证明存在**隐藏推理开销**：它既不流式送出、
+也不计入 `reasoning_tokens`，却计入 `output_tokens`（一次成功调用 `output_tokens=483` 而可见正文
+仅 70 字符；另一例同一任务产出同样短的 JSON 却用了 1658 token —— 方差很大），且会吃光小上限（`max_tokens=500` 时正文 0 字、流里只剩 `usage`+`finish`）。
+详见 v1.4 变更摘要 16 与 §17.1。"看不见"不等于"不存在"，MUST 以实测行为为准。
 
 由此修订 §13.1：`json_schema` 模式 MUST NOT 使用（稳定 400）；`json_object` 模式虽上游可用，但**宿主 `GenerateOptions` 不暴露 `response_format` 字段**，本系统发不出去（详见 §13.1）。故结构化输出 MUST 依赖"提示词契约 + 本地校验"，或经 `tools` 携带参数 schema。服务端不提供任何结构保证，§27.3 的本地 schema 校验是唯一防线。
 
@@ -1572,9 +1592,8 @@ ratios:
 # --- 不随 W 缩放（输出上限由 TPS 决定；计数由语义决定） ---
 absolute:                           # 括号内为实现中的落点（唯一来源，勿两处各写一份）
   output.default_max_output_tokens: 4096          # 主回答，见 §17.1
-  output.state_delta_target_tokens: 300
-  output.state_delta_soft_max_tokens: 1500        # v1.4：500 会被推理吃光（见变更摘要 16）
-  output.state_delta_hard_max_tokens: 2000
+  output.state_delta_soft_max_tokens: 3000        # v1.4：500 会被隐藏推理吃光（见变更摘要 16）
+  output.state_delta_hard_max_tokens: 4000        # override 也 MUST NOT 突破（v1.4 起真正生效）
   episode.summary_target_tokens: 800
   episode.summary_hard_max_tokens: 2400           # v1.4：1600 余量偏紧
   output.global_worker_output_max_tokens: 1000    # v1.4：300 会被推理吃光
@@ -1757,8 +1776,9 @@ v1.3 的实现凭猜测写了字段名与 chunk 类型，代价是**全部静默
   MUST NOT 归一化成字符串。
 - 未识别的 chunk 类型 MUST 显式上报（日志 + 遥测），MUST NOT 静默丢弃 ——
   否则"上游没送内容"与"我们漏读了"将无法区分。
-- `max-tokens` 结束且正文为空，是**输出预算被推理耗尽**的特征（见 §17.1 与 v1.4 变更摘要 16），
-  与"上游偶发空响应"成因不同、处置不同，MUST 分别上报。
+- `max-tokens` 结束且正文为空，是**输出预算被隐藏推理耗尽**的特征（见 §17.1 与 v1.4 变更摘要 16），
+  与"上游偶发空响应"（流里只有 `usage`+`finish` 且无 `output_tokens`）成因不同、处置不同，
+  MUST 分别上报。
 
 ---
 
