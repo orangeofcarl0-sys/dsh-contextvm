@@ -3,7 +3,7 @@
 逐条对照规范 §29 的 14 项完成条件，给出**可复跑的**证据。命令统一为：
 
 ```bash
-npm test                        # 203 项审计与验收测试
+npm test                        # 204 项审计与验收测试
 npm run audit:host              # 宿主契约实机审计（需本机安装 DSH）
 node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 ```
@@ -213,6 +213,80 @@ C 段与隐私守卫同样验证），避免"看起来在检查、实际永远�
 `GLOBAL_WORKER_MAX_OUTPUT 300`），而 verify-spec 的逐项核对只认 `absolute` 清单的格式
 —— 于是这处不一致整整漏过一轮。已对齐，并给 verify-spec 增加"陈旧写法"守卫
 （植入旧值即 3 项 FAIL）。
+
+## 补充：dsh web 交互审计 + 长对话/压缩干扰（2026-09-17 续四）
+
+### 命令在 web 里根本不可用（真机缺陷）
+
+web profile 里装好插件后，**指令菜单里没有 `contextvm`**；输入 `/contextvm` 回车会被当成
+**普通消息发给模型**（会话列表出现"进行中 /contextvm"，对话区显示"系统提示词 /contextvm …
+深度求索中"）。而其他插件的命令（fresh / goal / compact / room …）在同一菜单里正常工作。
+
+根因：注册用了 `ctx.get('commands')` —— 拿到的是**远程代理**，`register` 不抛错却
+**注册不进全局表**，于是挂载日志写着"命令 /contextvm"而实际无效。生态既有约定写在
+`dsh-fresh-start` 的源码注释里："命令须在 root ctx 用 `ctx.commands.register` 注册才进入
+全局命令列表"。
+
+修法：改为 `ctx.commands`，并用 `ctx.inject(['commands'], …)` 等服务就绪后再注册 ——
+**不**把 `commands` 列进插件级 `inject`（那是必需语义，会让整个插件等待该服务；命令只是
+可选的人读能力，不该有这种代价）。挂载日志也不再提前宣称命令状态（注册现在是异步的，
+早报就是撒谎）。真机复验：菜单出现 `contextvm`，执行后正常渲染状态；输入框清空、未发给模型。
+
+### 长对话 + 自动压缩干扰
+
+环境里的压缩相关插件：第三方 `auto-compact`（每步前 + 回合结束按用量比例触发）＋ 宿主
+`dsh-compaction` 家族（`-basic` / `-tool-result-pruner`）＋ `/compact` 命令。测试方式：
+新建会话（模型已确认是 **Union Alpha**），把该会话的自动压缩阈值经插件自己的 API
+（`/auto-compact/api/thresholds.set`）调到 5%，逼出压缩。
+
+结果：
+
+- **压缩确实触发**：UI 显示"已压缩 6 条历史记录（约 1308 tokens）"。
+- **宿主的检查点消息被正确排除注入**：`This is an automatically generated checkpoint …`
+  以 `system_note` + `kind=plugin` 落库 → 判定 `host_managed` → 不进 recent/候选/邻居
+  （§4.1.1 的黑名单按 kind 命中，不依赖 form）。✓
+- **ContextVM 的索引不受压缩影响**：宿主遮蔽了历史，我们的 raw 全在；注入（82 token）
+  仍同时带着 `Active decisions / facts`（含 provenance）与原文 recent。
+- **但这次无法把功劳归给 ContextVM**：宿主的压缩摘要**逐字保留**了那两个事实
+  （`<compacted-summary>` 里引用了原请求），所以模型答对不能说明是插件救回来的。
+  要隔离验证需要长到摘要会丢细节的会话，本轮没达到。
+- **副作用（值得记录）**：压缩的目的正是腾出上下文，而 ContextVM 会把自己索引里的原文
+  重新注入 —— 这是"保真优先于压缩"的设计取舍。本例净效果仍是省（注入 82 token vs
+  被压缩的 1308 token），但该交互 MUST 被知晓。
+
+### 一次回合里 5 次工具调用（已修）
+
+真机 web 一轮里模型调用了 `contextvm_commit_state` **5 次**：1 次缺 `source_event_ids`
+被拒、1 次成功、之后 3 次空 delta；宿主自己都注入了
+`You are repeating the exact same tool call with id...`。
+
+成因是注入契约与工具描述都写着"没有变化就提交空增量"，而契约**每步重新注入** ——
+听话的模型于是反复提交。在免费慢模型上，每次多余往返就是几十秒。
+改为"**每轮最多提交一次** + 空 delta 不是必须（许可而非要求）"。
+真机复验：成功提交 **5 → 2**，宿主不再发重复调用提示。
+
+### 两条 delta 路径写重（未修，需决策）
+
+同一轮里**工具路径**与**后台文本抽取路径**各写一份状态，同一事实以不同 key 存了两份：
+
+```
+06:42:22  fact key=acceptance_number                  ← 抽取器（英文 key 风格）
+06:42:22  fact key=calibration_reference_wavelength
+06:42:27  fact key=验收编号                            ← 模型的工具调用（中文 key）
+06:42:27  fact key=标定基准波长
+```
+
+抽取器拿到了 `stateSummary`（里面已有那两条），但用了不同 key，键级去重拦不住；冲突检测
+目前只覆盖 `constraint`。建议方向：工具路径**优先且唯一** —— 本轮已有成功的工具提交时
+跳过后台抽取；同时强化抽取器"状态摘要里已有等价事实时 MUST NOT 换 key 重记"。
+这属于新的范围，故只报不改。
+
+### 另一个发现：工具调用/结果完全没进记忆
+
+全库事件类型只有 `system_note / assistant_message / user_message / state_delta` ——
+**没有任何 `tool_result` / `tool_request`**。宿主事件流里似乎没有（或我们的映射漏了），
+于是长任务里"做过什么、工具返回了什么"这条记忆在 ContextVM 里是空的，而规范 §4.1 的
+事件类型表里是有 `tool_result` 的。需单独排查（是宿主不送，还是我们没映射）。
 
 ## 补充：本轮结构优化（代码审计驱动）
 

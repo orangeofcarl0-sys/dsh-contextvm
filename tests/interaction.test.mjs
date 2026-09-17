@@ -81,8 +81,10 @@ test('状态命令：能注册、返回成功，且内容含用户关心的关�
         sourceEventIds: [vm.raw.range(S)[0].eventId],
       });
 
+      // 契约：MUST 经 root ctx 的 ctx.commands 注册（用 ctx.get('commands') 拿到的是远程代理，
+      // 不抛错却注册不进全局表 —— web 审计发现的真机缺陷）
       const registered = [];
-      const ctx = { get: (n) => (n === 'commands' ? { register: (d) => { registered.push(d); return () => {}; } } : null) };
+      const ctx = { commands: { register: (d) => { registered.push(d); return () => {}; } } };
       const res = registerStatusCommand(ctx, vm);
       assert.equal(res.registered, true);
       assert.equal(registered.length, 1);
@@ -111,11 +113,11 @@ test('状态命令：能注册、返回成功，且内容含用户关心的关�
 test('状态命令：宿主无 commands 服务时如实报告，不抛错', () => {
   const vm = createContextVm({ rawConfig: {}, dbPath: ':memory:', llm: fakeLlm([{ text: '{}' }]) });
   try {
-    const res = registerStatusCommand({ get: () => null }, vm);
+    const res = registerStatusCommand({}, vm);
     assert.equal(res.registered, false);
     assert.ok(res.reason.includes('commands'));
     // 宿主 register 抛错也不能把插件启动带崩
-    const bad = registerStatusCommand({ get: () => ({ register() { throw new Error('boom'); } }) }, vm);
+    const bad = registerStatusCommand({ commands: { register() { throw new Error('boom'); } } }, vm);
     assert.equal(bad.registered, false);
     assert.ok(bad.reason.includes('boom'));
   } finally {

@@ -58,6 +58,7 @@ function makeHost() {
     },
   };
 
+  const commands = [];
   const ctx = {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     on(event, fn) {
@@ -69,13 +70,24 @@ function makeHost() {
       return null;
     },
     tools: { register: (t) => tools.push(t) },
+    // 宿主契约：命令经 root ctx 的 ctx.commands 注册；inject 用于等服务就绪
+    commands: { register: (d) => { commands.push(d); return () => {}; } },
+    inject(deps, cb) {
+      if (deps.includes('commands')) cb(ctx);
+      return Promise.resolve();
+    },
   };
-  return { ctx, handlers, tools, llmCalls };
+  return { ctx, handlers, tools, llmCalls, commands };
 }
 
-test('启动冒烟：apply 装配成功、注册两个工具、五条缝全部挂上', async () => {
+test('启动冒烟：apply 装配成功、注册两个工具、五条缝全部挂上、/contextvm 命令就位', async () => {
   const host = makeHost();
   const plugin = apply(host.ctx, { dbPath: ':memory:' });
+  assert.deepEqual(
+    host.commands.map((c) => c.name),
+    ['contextvm'],
+    '命令 MUST 经 ctx.commands 注册（用 ctx.get 拿到的是代理，注册不进全局表）',
+  );
 
   // 等异步的工具解析/注册完成（宿主包在本环境不可解析，故应走降级路径）
   await new Promise((r) => setTimeout(r, 30));

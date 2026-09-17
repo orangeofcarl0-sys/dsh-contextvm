@@ -244,3 +244,36 @@ test('强制的 mode 非法时抛错，不静默流穿（§8）', () => {
     be.close();
   }
 });
+
+// ---------------- 输出契约：每轮最多提交一次 ----------------
+//
+// 真机缺陷（web 长对话审计发现）：一轮里模型调用了 5 次 contextvm_commit_state ——
+// 1 次因缺 source_event_ids 被拒、1 次成功、之后又连发 3 次空 delta。
+// 宿主自己都注入了提示「You are repeating the exact same tool call with id...」。
+// 在目标模型（免费、慢）上，每次多余往返就是几十秒。
+//
+// 成因是契约与工具描述里都写着"没有变化就提交空增量"，而契约**每步都会重新注入**，
+// 于是一个听话的模型会反复提交。现改为"每轮最多一次 + 空 delta 不是必须"。
+
+test('输出契约：必须写明"每轮最多提交一次"，且不得再把空 delta 写成要求', async () => {
+  const { OUTPUT_CONTRACT } = await import('../lib/context/renderer.js');
+  const { DELTA_TOOL } = await import('../lib/llm/prompts.js');
+
+  assert.ok(OUTPUT_CONTRACT.includes('每轮最多提交一次'), '契约必须明确每轮最多一次');
+  assert.ok(/MUST NOT 反复提交空 delta/.test(OUTPUT_CONTRACT), '必须显式禁止反复提交空 delta');
+  assert.ok(
+    /没有变化就不必提交/.test(OUTPUT_CONTRACT),
+    '空 delta 必须写成"不必"（许可），而不是"要提交"（要求）',
+  );
+  assert.ok(
+    !/没有变化就调用一次空 delta/.test(OUTPUT_CONTRACT),
+    'MUST NOT 再出现"没有变化就调用一次空 delta"这种把空提交写成要求的措辞',
+  );
+
+  // 工具描述同样要带上这条，因为模型读的是它
+  assert.ok(/每轮最多提交一次/.test(DELTA_TOOL.description), '工具描述必须写明每轮最多一次');
+  assert.ok(
+    !/没有变化就提交空增量/.test(DELTA_TOOL.description),
+    'MUST NOT 再出现"没有变化就提交空增量"',
+  );
+});

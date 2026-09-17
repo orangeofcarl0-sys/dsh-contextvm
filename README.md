@@ -68,7 +68,7 @@ dsh plugin --profile <profile> add "github:orangeofcarl0-sys/dsh-contextvm"
 现在这类来源会被状态写入直接拒绝（提示词层面的劝阻只是辅助，校验才是保证）。
 `next_action` 也用稳定 key 落库并带 provenance，任何时候只保留一条。
 
-会话内输入 **`/contextvm`** 可随时查看当前窗口与预算、索引与状态规模、待处理增量、
+在 web / tui 里输入 **`/contextvm`**（指令菜单里也能找到）可随时查看当前窗口与预算、索引与状态规模、待处理增量、
 语义索引状态、容量拒绝计数等（该命令取不到项时写"未知"，自身绝不抛错）。
 
 ## 运行时要求
@@ -112,7 +112,7 @@ ratios:
 ## 测试
 
 ```bash
-npm test                # 全部审计与验收测试（203 项，默认串行）
+npm test                # 全部审计与验收测试（204 项，默认串行）
 npm run test:parallel   # 同上但并行（更快，供快速迭代）
 npm run test:acceptance # 只跑 1M 语料与 Phase A 验收
 npm run audit:host      # 宿主契约实机审计（需本机安装 DSH；核对接口、工具 schema、文档化参数）
