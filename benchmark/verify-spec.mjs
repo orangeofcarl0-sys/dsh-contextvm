@@ -39,6 +39,14 @@ for (const [key, value] of specCaps) {
   check(`${key} = ${value} 在规范中一致`, new RegExp(`${key.replace('.', '\\.')}:\\s*${value}\\b`).test(s));
 }
 
+// 注入策略（§4.1.1）：规范必须写明"分类 ≠ 注入"，且必须有唯一判定实现
+console.log('\n=== 注入策略（§4.1.1）===')
+check('规范含 §4.1.1 且写明分类≠注入', /### 4\.1\.1 分类 ≠ 注入/.test(s));
+check('规范规定宿主托管上下文 MUST NOT 进 recent/候选/邻居', /MUST NOT 进入 recent verbatim/.test(s) && /MUST NOT 成为检索候选/.test(s));
+check('规范规定判定唯一实现', /lib\/core\/injectability\.js/.test(s));
+const injPath = path.resolve(import.meta.dirname, '..', 'lib', 'core', 'injectability.js');
+check('判定模块存在（唯一实现处）', fs.existsSync(injPath));
+
 const pf = 1.693;
 check('预检断言 ratio*cap <= 0.98', pf * r.cap <= 0.98, `${(pf * r.cap).toFixed(3)}`);
 check('v1.0 两档落在预检上限外（故必然 400）', pf * 0.649 > 0.98 && pf * 0.782 > 0.98,

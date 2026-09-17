@@ -62,6 +62,14 @@
     `TokenUsage` 字段为 camelCase、块结束是 `block-end`）。v1.3 的实现凭猜测写了
     `argumentsText` / `done` / `block-stop` / `input_tokens`，导致工具调用的参数恒为空、
     用量与结束原因恒为 null —— 且**全部静默**。
+21. **新增 §4.1.1：分类 ≠ 注入，宿主托管上下文 MUST NOT 被重新注入**。v1.3 的 §4.1 把宿主
+    样板正确归类为 `system_note` 只解决了权威与优先级，没解决是否注入 —— 真机实测某会话
+    镜像内容的 **98%** 是宿主托管上下文，注入的 5860 token 里只有 31 token 是权威状态，
+    榜首证据完全不含对话内容。现规定宿主托管上下文（`form ∈ {snapshot,catalog}` 或
+    `kind ∈ {plugin,skill-catalog}`）与自身记账事件（`state_delta`）进索引但不进注入
+    （recent / 候选 / 邻居扩展三处都拦），判定唯一实现在 `lib/core/injectability.js`，
+    且跳过数量必须可观测。同会话实测：注入 **5860 → 188 token**。
+
 19. **§1.3 "不依赖 hidden CoT" 的表述细化**：目标模型**存在隐藏推理开销**（见第 16 条）。
     本系统仍 MUST NOT 依赖其内容（不读、不索引、不参与打分），但 MUST 为其预留输出预算。
     "不依赖"不等于"不会遇到"，更不等于"没有开销"。
@@ -486,6 +494,35 @@ state_delta
   `system_note` 的 source_authority 为 0.6 而 user 指令为 1.0（§16.1），
   否则 1,206 token 的宿主样板会以最高权威挤占只有 0.135W 的 recent verbatim 预算。
 
+### 4.1.1 分类 ≠ 注入：宿主托管上下文 MUST NOT 被重新注入（v1.4 真机实测补充）
+
+上面把宿主样板正确归类为 `system_note` 只是解决了**权威与优先级**，并没有解决**是否注入**。
+真机实测：某个真实会话镜像进来的内容里 **98% 是宿主托管上下文**
+（`Current runtime context` 快照三条共 7491 token + 技能目录 483 token），
+于是注入的 5860 token 中只有 **31 token** 是权威状态；榜首检索证据（score 0.871）
+的来源事件竟是「技能目录 + 运行时快照 + 本插件自己的 `state_delta`」——完全不含对话内容。
+宿主**自己每轮都会发**这些内容（同一次会话出现多份快照即为证据），再注入一遍只是重复占用
+稀缺窗口并稀释真正的证据。
+
+因此新增一条注入侧规则，与 §4.1 的分类规则分开陈述：
+
+- **宿主托管上下文**（`system_note` 且 `contextForm ∈ {snapshot, catalog}`，
+  或 `sourceKind ∈ {plugin, skill-catalog}`）与**本插件自己的记账事件**
+  （`event_type = 'state_delta'`）：
+  - MUST 继续入索引（可追溯、可 FTS 检索）；
+  - MUST NOT 进入 recent verbatim；
+  - MUST NOT 成为检索候选，MUST NOT 借 §7.3 的邻居扩展进入证据束。
+- 判定方向与 §4.1 相反，MUST 是**黑名单**（只排除已知的宿主托管形态，其余照常注入）。
+  理由是两种错的代价不对称：误把样板当内容注入只是浪费有界且可见的预算；
+  误把真实内容当样板丢掉则是静默丢失内容。故未知形态一律按"可注入"处理。
+- 判定 MUST 只有一处实现（`lib/core/injectability.js`），recent 与检索共用它，
+  MUST NOT 各写一套。
+- 被跳过的数量 MUST 可观测（`notes.skippedNonContent` / `notes.excludedNonContent`）——
+  否则"宿主样板又混进来了"这类回归将不可见。
+
+效果（同一真实会话、同一查询）：注入量 **5860 → 188 token**，证据段 **2912 → 76 token**，
+且剩下的每一个 token 都是真实内容。
+
 MUST：
 
 - 原始 `content` 不因任何 compact 操作修改。
@@ -772,6 +809,10 @@ summary_v1 -> summarize -> summary_v2 -> summarize -> summary_v3
 
 ## 7.1 Hybrid Retrieval
 
+候选池 MUST NOT 含宿主托管上下文与本插件记账事件（§4.1.1）：它们既不入 recent，
+也不得成为检索候选，更不得借 §7.3 的邻居扩展进入证据束 —— 真机实测它们曾以 0.871
+占据证据榜首（完全不含对话内容），并把证据段撑到占注入量的 96%。
+
 **关键词检索为主，embedding 为辅**（v1.3 调整）。v1.0/v1.1 把 semantic 排在首位
 （0.32 > lexical 0.28），该排序不再采用，理由见 §7.1.1。
 
@@ -975,6 +1016,10 @@ GLOBAL_CHUNK_TARGET_RATIO < NORMAL_TARGET_INPUT_RATIO < HEAVY_TARGET_INPUT_RATIO
 在 benchmark 后可调整比例值，但上述偏序、§9.1.1 的预检约束与 §9.6 的硬断言 MUST 始终成立。
 
 MUST 保留足够 headroom：编译后输入 MUST NOT 超过 `HARD_INPUT_CAP_RATIO * W`。
+
+`recent_verbatim` 只注入**对话内容**：宿主托管上下文与本插件记账事件 MUST 被排除
+（§4.1.1），且因宿主样板可占镜像内容的 98%，取数 MUST 先多取再筛（实现为 4 倍扫描），
+否则真实的最近对话会被样板挤掉。
 
 **输入预算随 `W` 缩放；输出预算不随 `W` 缩放。** 后者由 decode TPS 决定，见 §17.1。二者不可混用同一套缩放规则。
 

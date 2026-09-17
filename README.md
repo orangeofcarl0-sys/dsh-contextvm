@@ -58,6 +58,11 @@ dsh plugin --profile <profile> add "github:orangeofcarl0-sys/dsh-contextvm"
 [contextvm] 路由 openrouter-stealth/stealth/union-alpha: 声明窗口 262,144
 ```
 
+**宿主托管上下文不会被重复注入。** 宿主自己注入的运行时上下文快照与技能目录会被正常索引
+（可检索、可追溯），但**不会**再作为"最近原文"或"检索证据"注入回去——它们本就在宿主的提示词里。
+真机实测这些样板曾占某会话镜像内容的 98%，使注入的 5860 token 中只有 31 token 是真正的
+权威状态；修正后同一会话降到 **188 token**，且全部是真实内容。
+
 会话内输入 **`/contextvm`** 可随时查看当前窗口与预算、索引与状态规模、待处理增量、
 语义索引状态、容量拒绝计数等（该命令取不到项时写"未知"，自身绝不抛错）。
 
@@ -102,7 +107,7 @@ ratios:
 ## 测试
 
 ```bash
-npm test                # 全部审计与验收测试（195 项，默认串行）
+npm test                # 全部审计与验收测试（199 项，默认串行）
 npm run test:parallel   # 同上但并行（更快，供快速迭代）
 npm run test:acceptance # 只跑 1M 语料与 Phase A 验收
 npm run audit:host      # 宿主契约实机审计（需本机安装 DSH；核对接口、工具 schema、文档化参数）
