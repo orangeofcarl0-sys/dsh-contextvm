@@ -45,14 +45,16 @@ function makeHost() {
         yield {
           type: 'tool-call-delta', index: 0,
           name: 'contextvm_commit_state',
-          argumentsText: JSON.stringify({ ...DELTA_TOOL_ARGS, upsert: [] }),
+          argumentsDelta: JSON.stringify({ ...DELTA_TOOL_ARGS, upsert: [] }),
         };
       } else if (purpose === 'episode_summary') {
         yield { type: 'text-delta', index: 0, text: SUMMARY_JSON };
       } else {
         yield { type: 'text-delta', index: 0, text: '{}' };
       }
-      yield { type: 'done', stopReason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } };
+      // 宿主词汇：usage 与 finish 是独立 chunk，且 TokenUsage 用 camelCase
+      yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 5 } };
+      yield { type: 'finish', reason: 'end_turn' };
     },
   };
 

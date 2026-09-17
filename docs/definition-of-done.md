@@ -3,7 +3,7 @@
 逐条对照规范 §29 的 14 项完成条件，给出**可复跑的**证据。命令统一为：
 
 ```bash
-npm test                        # 188 项审计与验收测试
+npm test                        # 193 项审计与验收测试
 npm run audit:host              # 宿主契约实机审计（需本机安装 DSH）
 node benchmark/verify-spec.mjs  # 规范数值不变量与陈旧数值终检
 ```
@@ -100,6 +100,46 @@ C 段与隐私守卫同样验证），避免"看起来在检查、实际永远�
 一次性应用，它把参数当提示词，**不**解析 `/contextvm` 这类斜杠命令（实测该字符串被原样发给模型，
 模型于是自己去读仓库、跑测试并汇报）。命令入口属于 `tui` / `web` 这类交互 profile；
 `/contextvm` 的注册在本机有真机证据 —— 挂载日志那行只在 `commands.register` 未抛错时才打印。
+
+## 补充：交互审计的后续 —— 目标模型上的核心缺陷（2026-09-17 续）
+
+交互审计修完显性缺陷后，delta 仍在真机上反复 `unparseable`。深挖下去发现这**不是**交互问题，
+而是**针对目标模型的核心功能缺陷**，且全部是静默失效：
+
+| # | 缺陷 | 为何一直没被发现 | 修法 |
+|---|---|---|---|
+| 1 | **输出预算被推理耗尽**：目标模型回传推理，推理计入输出上限。`max_tokens=500` 时实测 `output_tokens=500`、正文 **0 字**、`finish=max-tokens` —— delta 永远抽不出内容 | 假宿主不产生推理；"unparseable" 的命名把成因指向了错误的解析器 | 上限提到覆盖"推理开销 + 目标正文"：`state_delta` 500/800 → **1500/2000**、worker 300/500 → **1000/1500**、摘要 1600 → **2400**。实测同一任务两次成功（用量 316/672），**耗时从 17s 降到 4.2s** |
+| 2 | **工具调用参数恒为空**：适配器读 `chunk.argumentsText`，宿主给的是 **`argumentsDelta`** | 假宿主是我自己写的，喂的正是我臆想的字段名 —— 测试通过得毫无意义 | 按宿主类型声明改用 `argumentsDelta`，并加**反向守卫**（代码里出现 `argumentsText` / `block-stop` / `case 'done'` 即 FAIL）与**正向守卫**（适配器必须按宿主词汇取值） |
+| 3 | **用量与结束原因恒为 null**：`usage` 与 `finish` 是**独立 chunk 类型**，我假设它们挂在某个 `done` 上；且 `TokenUsage` 字段是 camelCase（`inputTokens`），我读的是 `input_tokens` | 同上：假宿主按我的臆想实现。代价是 §9.6 的真实 usage 标定从未拿到过数据 | 显式处理 `usage` / `finish`；端口对外统一 snake_case，**转换只在 `lib/host/llm.js` 一处** |
+| 4 | **读了一个不存在的配置键**：`maxTokensFor('episode_summary')` 读 `output.episode_summary_hard_max_tokens`，而该键在实现里叫 `episode.summary_hard_max_tokens` → 返回 `undefined` | "跑得通"的测试不会暴露 undefined 上限 | 改为读 `episode.summary_hard_max_tokens`；删除死配置 `global_scan.worker_output_max_tokens`；新增**配置键访问守卫**测试（代码里读的每个配置键都必须在 `DEFAULTS` 中存在） |
+| 5 | **未识别的流 chunk 被静默丢弃** | 无 | 未识别类型 MUST 上报（日志 + 遥测）。真机上正是这条立刻点出了 `usage, finish` |
+
+第 1 项的诊断也一并改到位：`max-tokens` 且正文为空时上报 **`delta_budget_exhausted`**（含"请调大
+哪一项"的提示），与"上游偶发空响应"的 `delta_unparseable` 分开 —— 前者重试无用，故不入队，
+避免在慢模型上白烧 5 次调用。
+
+失败分类也补全了：辅助调用的失败按宿主的 finish reason 逐类上报 ——
+`error`（上游报错，带 `code`/`status`/`message` 与 `providerRetryAfterMs`）→ 入队重试；
+`aborted`（我们自己中止）→ 不入队；`max-tokens` + 正文空 → 预算耗尽，不入队并指出该调哪一项；
+其余 → 偶发空响应，入队。此前这四种都被笼统叫 `unparseable`，把成因指向了错误的解析器。
+
+**观察优先于猜测**：宿主 `GenerateOptions` 里确实有 `reasoningEffort`，看起来是对症旋钮，
+于是先把解析到的模型信息打出来 —— 结果该路由**不暴露任何推理档位**（`reasoning.efforts` 为空），
+这个旋钮根本用不上。若不看数据直接实现，就会写出一个静默无效的"优化"。
+同一处还发现：**挂载期探测配置的回退路由会打出假警报**（挂载时适配器尚未注册，
+`resolveModelInfo` 抛 `no adapter registered for provider ...`，而同一路由在会话期解析正常），
+故该探测已撤除，改为在真实路由首次解析时逐路由记录窗口与档位。
+
+两个守卫都做了**变异验证**：植入 `argumentsText` + `input_tokens` 后 B/C 段同时 FAIL；
+植入错键名后配置键守卫 FAIL。其中配置键守卫的第一版还自带一个 bug ——
+模板字符串里的 `` 是**退格字符**而非词边界，导致别名检查永远匹配不到任何东西；
+**是阳性对照把它抓出来的**（主断言全绿而植入的错键名未被报出）。
+
+规范同步升到 **v1.4**：新增变更摘要 16–19、§21.7.1「宿主流契约」（chunk 词汇表与字段名，
+含"MUST NOT 凭记忆或凭假宿主推断"）、§1.3 澄清"不依赖 CoT ≠ 不会遇到推理"，
+并把 §17.1 的输出上限清单改为**标注落点**以消除规范与实现的命名不一致。
+`benchmark/verify-spec.mjs` 新增**规范↔实现交叉核对**：直接读 `DEFAULTS` 逐项比对，
+而不是在脚本里再抄一遍数字（抄一遍就等于又开了一个来源）。
 
 ## 补充：本轮结构优化（代码审计驱动）
 

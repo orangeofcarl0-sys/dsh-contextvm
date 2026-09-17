@@ -240,3 +240,97 @@ test('Phase A 验收：未解析窗口时不静默兜底，直接报错（§2.1�
     vm.close();
   }
 });
+
+test('Phase A 验收：输出预算被推理耗尽时，如实上报且不排队空重试（真机发现）', async () => {
+  // 真机实测：目标模型会回传推理，推理计入输出上限。上限不足时 finish=max-tokens、
+  // 正文 0 字 —— 这不是"解析失败"，也不是瞬时故障，重试必然同样失败。
+  const eaten = {
+    calls: 0,
+    async complete() {
+      this.calls += 1;
+      return { text: '', toolCalls: [], usage: { input_tokens: 700, output_tokens: 500 }, stopReason: { kind: 'max-tokens' } };
+    },
+  };
+  const seen = [];
+  const vm = createContextVm({
+    rawConfig: {},
+    dbPath: ':memory:',
+    llm: eaten,
+    onTelemetry: (r) => seen.push(r),
+  });
+  vm.runtime.setWindow(S, W);
+  try {
+    const res = await vm.runtime.extractDelta({ sessionId: S, query: 'q', answer: 'a', eventIds: [] });
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, 'budget_exhausted', '必须与 unparseable 区分开');
+    assert.equal(eaten.calls, 1, '不得重试（成因是配置，重试无用）');
+    assert.equal(vm.runtime.pendingDeltas().length, 0, '不得入队，避免白烧慢调用');
+    const ev = seen.find((r) => r.event === 'delta_budget_exhausted');
+    assert.ok(ev, '必须发出专门的遥测事件');
+    assert.ok(ev.note.includes('state_delta_soft_max_tokens'), '提示必须指向要调的具体配置项');
+  } finally {
+    vm.close();
+  }
+});
+
+test('Phase A 验收：辅助调用的失败按 finish reason 分类上报（§21.7.1）', async () => {
+  const cases = [
+    {
+      name: '上游报错 → provider_error，入队可重试',
+      res: { text: '', toolCalls: [], usage: null, stopReason: { kind: 'error', failure: { code: 'rate_limited', status: 429, message: 'too many requests', providerRetryAfterMs: 3000 } } },
+      expect: { reason: 'provider_error', event: 'delta_provider_error', queued: 1 },
+    },
+    {
+      name: '被中止 → aborted，不入队（重试无意义）',
+      res: { text: '', toolCalls: [], usage: null, stopReason: { kind: 'aborted', failure: { code: 'aborted', message: 'signal' } } },
+      expect: { reason: 'aborted', event: 'delta_aborted', queued: 0 },
+    },
+    {
+      name: '推理耗尽预算 → budget_exhausted，不入队（成因是配置）',
+      res: { text: '', toolCalls: [], usage: null, stopReason: { kind: 'max-tokens' } },
+      expect: { reason: 'budget_exhausted', event: 'delta_budget_exhausted', queued: 0 },
+    },
+    {
+      name: '撞上限但正文非空 → 仍按 unparseable 处理（不是预算问题）',
+      res: { text: '我分析了很久但没给出 JSON', toolCalls: [], usage: null, stopReason: { kind: 'max-tokens' } },
+      expect: { reason: 'unparseable_delta', event: 'delta_unparseable', queued: 1 },
+    },
+  ];
+  for (const c of cases) {
+    const seen = [];
+    const vm = createContextVm({
+      rawConfig: {},
+      dbPath: ':memory:',
+      llm: { async complete() { return c.res; } },
+      onTelemetry: (r) => seen.push(r),
+    });
+    vm.runtime.setWindow(S, W);
+    try {
+      const res = await vm.runtime.extractDelta({ sessionId: S, query: 'q', answer: 'a', eventIds: [] });
+      assert.equal(res.reason, c.expect.reason, c.name);
+      assert.ok(seen.some((r) => r.event === c.expect.event), `${c.name}：应发出 ${c.expect.event}`);
+      assert.equal(vm.runtime.pendingDeltas().length, c.expect.queued, `${c.name}：入队数`);
+    } finally {
+      vm.close();
+    }
+  }
+
+  // 上游报错的详情必须带出来（否则又是"只知道失败、不知道为什么"）
+  const seen = [];
+  const vm = createContextVm({
+    rawConfig: {}, dbPath: ':memory:',
+    llm: { async complete() { return cases[0].res; } },
+    onTelemetry: (r) => seen.push(r),
+  });
+  vm.runtime.setWindow(S, W);
+  try {
+    await vm.runtime.extractDelta({ sessionId: S, query: 'q', answer: 'a', eventIds: [] });
+    const ev = seen.find((r) => r.event === 'delta_provider_error');
+    assert.equal(ev.failure_code, 'rate_limited');
+    assert.equal(ev.failure_status, 429);
+    assert.equal(ev.retry_after_ms, 3000, '上游建议的重试延迟应带出');
+    assert.ok(ev.failure_message.includes('too many requests'));
+  } finally {
+    vm.close();
+  }
+});

@@ -64,7 +64,7 @@ function scriptedWorkerLlm({ marker = '约束', failChunkIndex = -1, misreportCh
         }),
         toolCalls: [],
         usage: { input_tokens: 100, output_tokens: 50 },
-        stopReason: 'end_turn',
+        stopReason: { kind: 'stop' },
       };
     },
   };

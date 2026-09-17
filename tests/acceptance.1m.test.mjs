@@ -178,15 +178,15 @@ function scriptedLlm() {
           }),
           toolCalls: [],
           usage: { input_tokens: 1000, output_tokens: 50 },
-          stopReason: 'end_turn',
+          stopReason: { kind: 'stop' },
         };
       }
       if (purpose === 'episode_summary') {
         this.calls.summary += 1;
-        return { text: SUMMARY_JSON, toolCalls: [], usage: { input_tokens: 100, output_tokens: 50 }, stopReason: 'end_turn' };
+        return { text: SUMMARY_JSON, toolCalls: [], usage: { input_tokens: 100, output_tokens: 50 }, stopReason: { kind: 'stop' } };
       }
       this.calls.other += 1;
-      return { text: '{}', toolCalls: [], usage: { input_tokens: 10, output_tokens: 5 }, stopReason: 'end_turn' };
+      return { text: '{}', toolCalls: [], usage: { input_tokens: 10, output_tokens: 5 }, stopReason: { kind: 'stop' } };
     },
   };
 }

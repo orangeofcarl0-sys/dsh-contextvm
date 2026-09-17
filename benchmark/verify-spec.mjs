@@ -23,6 +23,22 @@ for (const [k, v] of Object.entries(r)) console.log(`         ${k.padEnd(7)} ${v
 const comp = [0.020, 0.040, 0.135, 0.025, 0.160, 0.170];
 const sum = comp.reduce((a, b) => a + b, 0);
 check('组件上界之和 <= cap', sum <= r.cap, `sum=${sum.toFixed(3)} cap=${r.cap}`);
+// 规范与实现的交叉核对：§17.1 的输出上限是规范性数值，两处 MUST 一致。
+// 这里直接把 DEFAULTS 读出来比，而不是在脚本里再抄一遍数字 —— 抄一遍就等于又开了一个来源。
+const { DEFAULTS } = await import('../lib/app/config.js');
+const specCaps = [
+  ['output.state_delta_soft_max_tokens', DEFAULTS.output.state_delta_soft_max_tokens],
+  ['output.state_delta_hard_max_tokens', DEFAULTS.output.state_delta_hard_max_tokens],
+  ['output.global_worker_output_max_tokens', DEFAULTS.output.global_worker_output_max_tokens],
+  ['output.global_worker_output_complex_max_tokens', DEFAULTS.output.global_worker_output_complex_max_tokens],
+  ['episode.summary_target_tokens', DEFAULTS.episode.summary_target_tokens],
+  ['episode.summary_hard_max_tokens', DEFAULTS.episode.summary_hard_max_tokens],
+];
+console.log('\n=== 规范 §17.1 输出上限 vs 实现 DEFAULTS ===');
+for (const [key, value] of specCaps) {
+  check(`${key} = ${value} 在规范中一致`, new RegExp(`${key.replace('.', '\\.')}:\\s*${value}\\b`).test(s));
+}
+
 const pf = 1.693;
 check('预检断言 ratio*cap <= 0.98', pf * r.cap <= 0.98, `${(pf * r.cap).toFixed(3)}`);
 check('v1.0 两档落在预检上限外（故必然 400）', pf * 0.649 > 0.98 && pf * 0.782 > 0.98,
@@ -75,7 +91,7 @@ const need = [
   ['§7.1.1 关键词为主的理由', '为什么以关键词为主'],
   ['§7.1.2 embedding 降级定位', 'embedding 的定位：降级，而非移除'],
   ['摘要桥接声明', '承担了 embedding 原本最主要的收益'],
-  ['版本 v1.3', '文档版本**：v1.3'],
+  ['版本 v1.4', '文档版本**：v1.4'],
 ];
 for (const [label, pat] of need) check(label, s.includes(pat));
 

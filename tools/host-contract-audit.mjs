@@ -191,6 +191,31 @@ const contracts = [
     check: () => findInTypes(['dsh-llm'], /type:\s*'text-delta'/g).length > 0,
     evidence: 'dsh-llm/lib/types/types.d.ts',
   },
+  {
+    what: 'tool-call-delta 携带的是 argumentsDelta（不是 argumentsText）',
+    check: () =>
+      findInTypes(['dsh-llm'], /type:\s*'tool-call-delta';[\s\S]{0,200}?argumentsDelta:\s*string/).length > 0,
+    evidence: 'dsh-llm/lib/types/types.d.ts StreamChunk',
+  },
+  {
+    what: "usage 与 finish 是**独立**的 chunk 类型（不挂在某个 done 上）",
+    check: () =>
+      findInTypes(['dsh-llm'], /type:\s*'usage';[\s\S]{0,80}?usage:\s*TokenUsage/).length > 0 &&
+      findInTypes(['dsh-llm'], /type:\s*'finish';[\s\S]{0,120}?reason:\s*FinishReason/).length > 0,
+    evidence: 'dsh-llm/lib/types/types.d.ts StreamChunk',
+  },
+  {
+    what: 'TokenUsage 的字段是 camelCase（inputTokens / outputTokens）',
+    check: () =>
+      findInTypes(['dsh-llm'], /interface TokenUsage[\s\S]{0,200}?inputTokens:\s*number[\s\S]{0,80}?outputTokens:\s*number/)
+        .length > 0,
+    evidence: 'dsh-llm/lib/types/types.d.ts TokenUsage',
+  },
+  {
+    what: "流里的块结束类型是 block-end（不是 block-stop）",
+    check: () => findInTypes(['dsh-llm'], /type:\s*'block-end'/g).length > 0,
+    evidence: 'dsh-llm/lib/types/types.d.ts StreamChunk',
+  },
 ];
 
 for (const c of contracts) {
@@ -263,6 +288,37 @@ const wrongExec = all.filter(({ code }) => /exec\?\.session\b/.test(code));
 if (wrongExec.length) {
   bad(`引用宿主不存在的 exec.session：${wrongExec.map((x) => x.f).join(', ')}`);
 } else ok('未引用宿主不存在的 exec.session');
+
+// —— 宿主流词汇：这一组是"凭猜测写宿主字段名"的守卫
+//
+// 真机教训：适配器里写的是 `chunk.argumentsText`，而宿主给的是 `argumentsDelta` ——
+// 于是工具调用的参数**永远是空的**，每次 delta 都变成"空增量已应用"，
+// 表面上一切正常、状态却从不积累。同理漏读独立的 usage/finish chunk 让用量与
+// 结束原因恒为 null。假宿主（自己写的）永远测不出这类错，只有类型声明能证伪。
+const wrongVocab = [
+  { re: /argumentsText/, msg: 'argumentsText（宿主是 argumentsDelta）' },
+  { re: /block-stop/, msg: "block-stop（宿主是 block-end）" },
+  { re: /case\s*'(done|end)'\s*:/, msg: "case 'done'/'end'（宿主没有这两种 chunk 类型）" },
+];
+for (const { re, msg } of wrongVocab) {
+  const hits = all.filter(({ code }) => re.test(code));
+  if (hits.length) bad(`使用了宿主不存在的流词汇 ${msg}：${hits.map((x) => x.f).join(', ')}`);
+  else ok(`未使用宿主不存在的流词汇 ${msg.split('（')[0]}`);
+}
+
+// 正向：适配器必须真的按宿主词汇取值（只查"没有错"会漏掉"根本没读"）
+const adapter = all.find(({ f }) => f.endsWith(path.join('host', 'llm.js')));
+const adapterNeeds = [
+  [/chunk\.argumentsDelta/, 'tool-call-delta 的参数增量'],
+  [/case\s*'usage'/, 'usage chunk'],
+  [/case\s*'finish'/, 'finish chunk'],
+  [/u\.inputTokens/, 'TokenUsage 的 camelCase 字段'],
+];
+if (!adapter) bad('未找到 host/llm.js 适配器');
+else {
+  const missing = adapterNeeds.filter(([re]) => !re.test(adapter.code)).map(([, m]) => m);
+  missing.length ? bad(`host/llm.js 未按宿主词汇取值：${missing.join('、')}`) : ok('host/llm.js 按宿主词汇取值（argumentsDelta / usage / finish / inputTokens）');
+}
 
 // —— 正向检查：必须真的用了正确写法（只查"没有错"会漏掉"根本没做"）
 const usesConfigHeader = all.filter(({ code }) => /header\?\.config\?\.(provider|model)/.test(code));

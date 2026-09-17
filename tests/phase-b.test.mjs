@@ -33,7 +33,7 @@ function flakyLlm(failTimes) {
     async complete() {
       this.calls += 1;
       if (this.calls <= failTimes) throw new Error('upstream 502 provider_unavailable');
-      return { text: SUMMARY_JSON, toolCalls: [], usage: { input_tokens: 10, output_tokens: 10 }, stopReason: 'end_turn' };
+      return { text: SUMMARY_JSON, toolCalls: [], usage: { input_tokens: 10, output_tokens: 10 }, stopReason: { kind: 'stop' } };
     },
   };
 }

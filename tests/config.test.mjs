@@ -141,3 +141,67 @@ test('W 非法时直接报错，不静默取默认值', () => {
 test('未知配置项不致静默通过（保留显式拒绝能力）', () => {
   assert.throws(() => resolveConfig({ posture: 'x' }), /未知配置项/);
 });
+
+// ---------------- 配置键访问守卫 ----------------
+//
+// 真机教训：`maxTokensFor('episode_summary')` 读的是 `output.episode_summary_hard_max_tokens`，
+// 而配置里的键叫 `episode.summary_hard_max_tokens` —— 读了一个**不存在的键**，
+// 拿到 undefined 一路传下去，摘要调用的输出上限静默变成宿主的默认值。
+// 这类错误在任何"跑得通"的测试里都不会暴露，只有把代码里的键与 DEFAULTS 对表才能发现。
+// 做法与窗口头那条守卫一致：先认出"哪个变量是哪个配置段"，再只查该变量上的直接键访问。
+
+function configKeyViolations(code) {
+  const sections = new Set(Object.keys(DEFAULTS));
+  const bad = [];
+  for (const m of code.matchAll(/\b(?:this\.)?config\.([a-z_]+)\.([a-z_]+)\b/g)) {
+    const [, sec, key] = m;
+    if (!sections.has(sec)) bad.push(`${sec}（段不存在）`);
+    else if (!(key in DEFAULTS[sec])) bad.push(`${sec}.${key}`);
+  }
+  // 别名：const o = this.config.output（或二级 const c = config.ratios.context_components）
+  // → 之后 o.<key> / c.<key> 都必须存在于**该层**对象里
+  const aliases = new Map();
+  for (const m of code.matchAll(
+    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:this\.)?config\.([a-z_]+)(?:\.([a-z_]+))?\b/g,
+  )) {
+    const scope = m[3] ? DEFAULTS[m[2]]?.[m[3]] : DEFAULTS[m[2]];
+    aliases.set(m[1], { path: m[3] ? `${m[2]}.${m[3]}` : m[2], scope });
+  }
+  for (const [v, { path: scopePath, scope }] of aliases) {
+    if (!scope || typeof scope !== 'object') continue;
+    // 注意：模板字符串里的 `\b` 是**退格字符**而不是词边界，必须写 `\\b`；
+    // 否则这条检查永远匹配不到任何东西 —— 一个"看着在查、其实永远通过"的守卫。
+    // （本条由阳性对照抓出：主断言全绿，而植入的错键名却没被报出。）
+    const re = new RegExp(`\\b${v}\\.([a-z_]+)\\b`, 'g');
+    for (const m of code.matchAll(re)) {
+      if (!(m[1] in scope)) bad.push(`${scopePath}.${m[1]}（经别名 ${v}）`);
+    }
+  }
+  return bad;
+}
+
+test('配置键访问守卫：代码里读的每个配置键都必须在 DEFAULTS 中存在', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const files = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.js')) files.push(p);
+    }
+  };
+  walk('lib');
+
+  const violations = [];
+  for (const f of files) {
+    const code = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    const bad = configKeyViolations(code);
+    if (bad.length) violations.push(`${f}: ${[...new Set(bad)].join(', ')}`);
+  }
+  assert.deepEqual(violations, [], `读到了 DEFAULTS 中不存在的配置键：\n${violations.join('\n')}`);
+
+  // 阳性对照：守卫必须能抓到"键名写错"这一形态
+  const planted = configKeyViolations('const o = this.config.output; return o.episode_summary_hard_max_tokens;');
+  assert.ok(planted.some((x) => x.includes('episode_summary_hard_max_tokens')), '守卫必须能抓到不存在的键');
+});

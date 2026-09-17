@@ -4,7 +4,7 @@
 > 目标模型：OpenRouter `stealth/union-alpha`，物理窗口 `W = 262144`。
 > **全部上下文预算按 `W` 的比例定义**（§9 / §19），262144 仅作为参考窗口出现，MUST NOT 硬编码。
 
-**文档版本**：v1.3  
+**文档版本**：v1.4  
 **状态**：Implementation Baseline / 可直接交由本地 Agent 实现  
 **目标读者**：本地编码 Agent、系统工程实现者、测试 Agent  
 **约束优先级**：本文档中 MUST > SHOULD > MAY。若实现与本文冲突，以 MUST 为准。  
@@ -36,6 +36,30 @@
 13. **§7.1 改为"关键词检索为主、embedding 为辅"**。v1.1 把 semantic 排在首位（0.32 > lexical 0.28）的排序不再采用。新增 §7.1.1（为何以关键词为主：本项目检索需求以 exact-first 为主、窗口稀缺使**精确率优先于改写召回率**、中文场景下关键词检索更可靠且完全确定、免费/stealth 路由不宜再叠加第二个网络依赖）与 §7.1.2（**embedding 是降级而非移除**：权重降至 0.10 与其它辅助分量同级、缺失时按唯一规则自动重归一化、接入时须可关闭且状态可观测）。
 14. **新增 `summary_search` 候选源**，承担 embedding 原本最主要的收益——"换个说法也能召回"：episode 摘要由模型生成，措辞与原始事件天然不同，故对同义改写有容忍度，且摘要本就是本项目的派生物，零额外依赖、零额外密钥。摘要命中作为**导航单元**注入并标注其 episode 与原始范围（§6.3：摘要不是真相源），分值刻意低于原始命中，且 MUST NOT 挤掉可追溯的原始证据。
 15. **删除 §7.1 末尾与 §7.1.2 重复的降级声明**，使"embedding 不可用时的降级"只有一处陈述。
+
+## v1.4 变更摘要（相对 v1.3）
+
+16. **目标模型会回传推理，且推理计入输出上限**（真机实测，影响 §1.3 / §2.1.1 / §17.1）。
+    实测：`max_tokens=500` 时 `output_tokens` 恰好 500、正文 0 字、`finish=max-tokens` ——
+    输出预算被推理吃光，`state_delta` 永远抽不出内容（表现为"插件在跑，但状态从不积累"）。
+    上限提到 2000 后，同一任务两次都成功（用量 316 / 672），且**耗时从 17s 降到 4.2s**（不再撞上限）。
+    据此：`state_delta` 上限 500/800 → **1500/2000**；worker 300/500 → **1000/1500**；
+    episode 摘要上限 1600 → **2400**。辅助调用上限的判定原则由"够写答案"改为
+    **MUST 覆盖「推理开销 + 目标正文」**。
+17. **输出上限的命名与落点统一**（消除"规范一个名、实现另一个名"）：v1.3 清单里的
+    `episode_summary_target_tokens` / `episode_summary_hard_max_tokens` 在实现中位于
+    `episode.summary_target_tokens` / `episode.summary_hard_max_tokens`，而取上限的代码曾按
+    规范的名字去读 `output.episode_summary_hard_max_tokens` —— 该键不存在，摘要调用的输出上限
+    一直是 `undefined`（静默用了宿主默认值）。§17.1 的清单改为**标注落点**，并新增"配置键访问守卫"
+    测试：代码里读的每个配置键都必须存在于 `DEFAULTS`。
+18. **新增 §21.7.1 宿主流契约**：把 `llm.stream()` 的真实 chunk 词汇与字段名写成契约
+    （`tool-call-delta` 携带 `argumentsDelta`、`usage` 与 `finish` 是**独立** chunk、
+    `TokenUsage` 字段为 camelCase、块结束是 `block-end`）。v1.3 的实现凭猜测写了
+    `argumentsText` / `done` / `block-stop` / `input_tokens`，导致工具调用的参数恒为空、
+    用量与结束原因恒为 null —— 且**全部静默**。
+19. **§1.3 "不依赖 hidden CoT" 的表述细化**：目标模型**可能**回传推理。本系统仍 MUST NOT
+    依赖其内容（一律丢弃、不进索引、不参与打分），但 MUST 为其预留输出预算（见第 16 条）。
+    "不依赖"不等于"不会遇到"。
 
 未改变的核心原则：raw 永不删、state 版本化、provenance 强制、GLOBAL 完整覆盖、不依赖 hidden CoT。
 
@@ -145,6 +169,8 @@ V1 MUST NOT：
 
 - 修改模型权重、RoPE、YaRN 或 position embedding。
 - 试图恢复、推断或持久化隐藏 CoT。
+  注意（v1.4 澄清）：目标模型**可能回传推理**，"不依赖"不等于"不会遇到"。推理一律丢弃、
+  不进索引、不参与打分；但**必须为其预留输出预算**（§17.1、§21.7.1），否则正文会被挤空。
 - 把生成式 summary 视为最终真相源。
 - 每轮调用都重新总结全部历史。
 - 仅依赖向量数据库作为长期记忆。
@@ -1544,15 +1570,15 @@ ratios:
   global_chunk_overlap: 0.011       # @262144 -> 2883  (v1.0: 3000)
 
 # --- 不随 W 缩放（输出上限由 TPS 决定；计数由语义决定） ---
-absolute:
-  default_max_output_tokens: 4096   # 主回答，见 §17.1
-  state_delta_target_tokens: 300
-  state_delta_soft_max_tokens: 500
-  state_delta_hard_max_tokens: 800
-  episode_summary_target_tokens: 800
-  episode_summary_hard_max_tokens: 1600
-  global_worker_output_max_tokens: 300
-  global_worker_output_complex_max_tokens: 500
+absolute:                           # 括号内为实现中的落点（唯一来源，勿两处各写一份）
+  output.default_max_output_tokens: 4096          # 主回答，见 §17.1
+  output.state_delta_target_tokens: 300
+  output.state_delta_soft_max_tokens: 1500        # v1.4：500 会被推理吃光（见变更摘要 16）
+  output.state_delta_hard_max_tokens: 2000
+  episode.summary_target_tokens: 800
+  episode.summary_hard_max_tokens: 2400           # v1.4：1600 余量偏紧
+  output.global_worker_output_max_tokens: 1000    # v1.4：300 会被推理吃光
+  output.global_worker_output_complex_max_tokens: 1500
   router_max_output_tokens: 120
   reranker_max_output_tokens: 120
   # episode 原始尺寸的保真度上限（§6.1）：防止随 W 线性外推
@@ -1708,6 +1734,31 @@ async function auxCompletion({ purpose, system, messages, maxTokens, tools, sign
 ```
 
 MUST 经 `ctx.llm.stream` 发起。注意宿主 `GenerateOptions` **不含任何 `response_format` 字段**，故本系统无法请求服务端 JSON 模式；结构化输出 MUST 依赖"提示词合同 + 本地校验"，或经 `tools` 携带参数 schema（§13.1）。
+
+### 21.7.1 宿主流契约（`llm.stream()` 的真实词汇）
+
+v1.3 的实现凭猜测写了字段名与 chunk 类型，代价是**全部静默失效**：工具调用参数恒为空、
+用量与结束原因恒为 null、未知 chunk 被无声丢弃。以下词汇以宿主类型声明为准，
+**MUST NOT 凭记忆或凭假宿主推断**；`tools/host-contract-audit.mjs` 的 B/C 两段对其设有正反双向守卫。
+
+| chunk `type` | 携带字段 | 说明 |
+|---|---|---|
+| `text-delta` | `text` | 正文增量 |
+| `reasoning-delta` | `text` | 推理增量，**一律丢弃**（§1.3 / §27.4） |
+| `tool-call-delta` | `id`、`name?`、**`argumentsDelta`** | 参数增量是 `argumentsDelta`，**不是** `argumentsText` |
+| `block-start` / `block-end` | `index` / `index, block` | 块边界是 `block-end`，**不是** `block-stop` |
+| `usage` | `usage: TokenUsage` | **独立 chunk**；MUST NOT 假设它挂在某个 `done` 上 |
+| `finish` | `reason: FinishReason` | **独立 chunk**；原因是 `reason`（形状 `{kind}`），**不是** `stopReason` |
+
+- `TokenUsage` 的字段是 **camelCase**：`inputTokens` / `outputTokens`（可选 `cacheReadTokens` /
+  `cacheWriteTokens` / `reasoningTokens` / `totalTokens`）。端口对外统一为 snake_case，
+  **转换只允许在 `lib/host/llm.js` 一处发生**，下游与假端口只有一套词汇。
+- `FinishReason` 是**对象**（`{kind: 'stop' | 'tool-calls' | 'max-tokens' | 'aborted' | ...}`，merge-extensible），
+  MUST NOT 归一化成字符串。
+- 未识别的 chunk 类型 MUST 显式上报（日志 + 遥测），MUST NOT 静默丢弃 ——
+  否则"上游没送内容"与"我们漏读了"将无法区分。
+- `max-tokens` 结束且正文为空，是**输出预算被推理耗尽**的特征（见 §17.1 与 v1.4 变更摘要 16），
+  与"上游偶发空响应"成因不同、处置不同，MUST 分别上报。
 
 ---
 

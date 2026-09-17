@@ -1,7 +1,7 @@
 # ContextVM — 低 TPS／小窗口模型的外部上下文虚拟化层（DSH 插件）
 
 给"调用成本近似为零、但 decode TPS 低、原生窗口有限、不回传思维链"的模型提供
-接近 1M+ 历史的连续工作体验。实现基线见 [context_virtualization_spec_v1.md](./context_virtualization_spec_v1.md)（v1.3）。
+接近 1M+ 历史的连续工作体验。实现基线见 [context_virtualization_spec_v1.md](./context_virtualization_spec_v1.md)（v1.4）。
 
 ## 它做什么
 
@@ -52,6 +52,12 @@ dsh plugin --profile <profile> add "github:orangeofcarl0-sys/dsh-contextvm"
 [contextvm] 已注册 8 个工具：contextvm_commit_state, contextvm_exhaustive_scan, search_memory, ...
 ```
 
+首次解析到某条路由时会记一行它的**声明窗口**（以及适配器默认输出上限、可选推理档位，若提供）：
+
+```
+[contextvm] 路由 openrouter-stealth/stealth/union-alpha: 声明窗口 262,144
+```
+
 会话内输入 **`/contextvm`** 可随时查看当前窗口与预算、索引与状态规模、待处理增量、
 语义索引状态、容量拒绝计数等（该命令取不到项时写"未知"，自身绝不抛错）。
 
@@ -80,10 +86,17 @@ ratios:
 启动时会校验 §19.1 的全部不变量（偏序、组件上界之和、预检系数等），
 **任一条失败即拒绝启动**并指出具体条目，不会用默认值静默继续。
 
+**辅助调用的输出上限（`output.*`）要覆盖"推理开销 + 目标正文"**：目标模型会回传推理，
+而推理计入输出上限。真机实测 `max_tokens=500` 时用量恰好 500、正文 0 字、`finish=max-tokens`
+—— 状态抽取因此永远拿不到内容（表现为"插件在跑但状态从不积累"）。默认值已按实测上调；
+若你换到推理更长的模型，优先调大 `output.state_delta_soft_max_tokens` 与
+`output.global_worker_output_max_tokens`。撞上限时插件会打出 `delta_budget_exhausted` 并直接
+指出该调哪一项（这种失败重试无用，故不入队）。
+
 ## 测试
 
 ```bash
-npm test                # 全部审计与验收测试（188 项，默认串行）
+npm test                # 全部审计与验收测试（193 项，默认串行）
 npm run test:parallel   # 同上但并行（更快，供快速迭代）
 npm run test:acceptance # 只跑 1M 语料与 Phase A 验收
 npm run audit:host      # 宿主契约实机审计（需本机安装 DSH；核对接口、工具 schema、文档化参数）

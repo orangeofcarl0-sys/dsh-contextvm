@@ -311,9 +311,10 @@ test('LlmPort 适配器：聚合流式增量，丢弃 reasoning，解析工具�
     { type: 'block-start', index: 1, blockType: 'text' },
     { type: 'text-delta', index: 1, text: '结论' },
     { type: 'text-delta', index: 1, text: '如下' },
-    { type: 'tool-call-delta', index: 2, name: 'contextvm_commit_state', argumentsText: '{"upsert":[{"type":"fact",' },
-    { type: 'tool-call-delta', index: 2, argumentsText: '"value":"x"}]}' },
-    { type: 'done', stopReason: 'tool_use', usage: { input_tokens: 10, output_tokens: 5 } },
+    { type: 'tool-call-delta', index: 2, name: 'contextvm_commit_state', argumentsDelta: '{"upsert":[{"type":"fact",' },
+    { type: 'tool-call-delta', index: 2, argumentsDelta: '"value":"x"}]}' },
+    { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, reasoningTokens: 3 } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
   ];
   const { ctx } = fakeCtx({
     llm: {
@@ -335,8 +336,51 @@ test('LlmPort 适配器：聚合流式增量，丢弃 reasoning，解析工具�
   assert.equal(res.toolCalls.length, 1);
   assert.equal(res.toolCalls[0].name, 'contextvm_commit_state');
   assert.deepEqual(res.toolCalls[0].args, { upsert: [{ type: 'fact', value: 'x' }] });
-  assert.equal(res.stopReason, 'tool_use');
-  assert.deepEqual(res.usage, { input_tokens: 10, output_tokens: 5 });
+  assert.deepEqual(res.stopReason, { kind: 'tool-calls' }, '宿主 FinishReason 是 {kind} 对象，不转字符串');
+  // 宿主给 camelCase（inputTokens），端口契约给 snake_case —— 转换在适配器一处完成
+  assert.deepEqual(res.usage, { input_tokens: 10, output_tokens: 5, reasoning_tokens: 3 });
+  // 流规模要如实带出去：真机上"27 秒 + text/usage/stopReason 全空"曾无从判断
+  // 是上游没送内容还是我们漏读了 chunk
+  assert.equal(res.chunks, 9);
+  assert.ok(res.types.includes('text-delta') && res.types.includes('finish'));
+});
+
+test('LlmPort 适配器：未识别的 chunk 类型必须露面（此前被静默丢弃）', async () => {
+  const warned = [];
+  const { ctx } = fakeCtx({
+    llm: {
+      stream() {
+        return (async function* gen() {
+          yield { type: 'block-start', index: 0, blockType: 'text' };
+          yield { type: 'upstream-error', message: 'provider exploded' };
+        })();
+      },
+    },
+  });
+  const port = createLlmPort(ctx, { logger: (level, msg) => warned.push(`${level}:${msg}`) });
+  const res = await port.complete({ provider: 'p', model: 'm', messages: [{ role: 'user', content: 'q' }] });
+  assert.equal(res.text, '', '未识别的 chunk 不产生文本');
+  assert.equal(res.chunks, 2, '但仍应计入流规模');
+  // 只筛未识别告警：端口加载宿主模块失败时的提示与本事无关
+  const unk = warned.filter((w) => w.includes('未识别'));
+  assert.equal(unk.length, 1, '必须恰好告警一次');
+  assert.ok(unk[0].includes('upstream-error'), '告警必须点出未识别的类型名');
+});
+
+test('LlmPort 适配器：空流不报未识别告警（偶发空响应是上游行为，不是解析缺陷）', async () => {
+  const warned = [];
+  const { ctx } = fakeCtx({
+    llm: {
+      stream() {
+        return (async function* gen() {})();
+      },
+    },
+  });
+  const port = createLlmPort(ctx, { logger: (level, msg) => warned.push(`${level}:${msg}`) });
+  const res = await port.complete({ provider: 'p', model: 'm', messages: [{ role: 'user', content: 'q' }] });
+  assert.equal(res.chunks, 0);
+  assert.equal(res.text, '');
+  assert.deepEqual(warned.filter((w) => w.includes('未识别')), [], '空流不应产生未识别类型告警');
 });
 
 test('LlmPort 适配器：宿主 llm 不可用时抛可诊断错误', async () => {
