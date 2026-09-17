@@ -187,6 +187,32 @@ const contracts = [
     evidence: 'dsh-llm/lib/types/types.d.ts',
   },
   {
+    what: "ContentBlockMap 的块类型是 'tool-call' / 'tool-result'（连字符）",
+    check: () =>
+      findInTypes(['dsh-llm'], /'tool-call':\s*ToolCallBlock/).length > 0 &&
+      findInTypes(['dsh-llm'], /'tool-result':\s*ToolResultBlock/).length > 0,
+    evidence: 'dsh-llm/lib/types/types.d.ts ContentBlockMap',
+  },
+  {
+    what: "ToolResultBlock 形如 {type:'tool-result', toolCallId, content: ContentBlock[]}",
+    check: () =>
+      findInTypes(['dsh-llm'], /type:\s*'tool-result';[\s\S]{0,160}?toolCallId:[\s\S]{0,80}?content:\s*ContentBlock\[\]/)
+        .length > 0,
+    evidence: 'dsh-llm/lib/types/types.d.ts ToolResultBlock',
+  },
+  {
+    what: "ToolCallBlock 的参数是 arguments（原始 JSON 串），不是 input",
+    check: () =>
+      findInTypes(['dsh-llm'], /type:\s*'tool-call';[\s\S]{0,200}?arguments:\s*string/).length > 0,
+    evidence: 'dsh-llm/lib/types/types.d.ts ToolCallBlock',
+  },
+  {
+    what: "session 的 tool/result 事件负载在 message（不是 content）",
+    check: () =>
+      findInTypes(['dsh-session'], /'tool\/result':[\s\S]{0,200}?message:\s*ToolResultMessage/).length > 0,
+    evidence: 'dsh-session/lib/types/types.d.ts SurfaceEventMap',
+  },
+  {
     what: 'StreamChunk 含 text-delta（我据此聚合文本）',
     check: () => findInTypes(['dsh-llm'], /type:\s*'text-delta'/g).length > 0,
     evidence: 'dsh-llm/lib/types/types.d.ts',
@@ -304,6 +330,30 @@ for (const { re, msg } of wrongVocab) {
   const hits = all.filter(({ code }) => re.test(code));
   if (hits.length) bad(`使用了宿主不存在的流词汇 ${msg}：${hits.map((x) => x.f).join(', ')}`);
   else ok(`未使用宿主不存在的流词汇 ${msg.split('（')[0]}`);
+}
+
+// 内容块词汇：这三个名字都曾被我猜错，且错了都是**静默丢内容**
+const wrongBlocks = [
+  { re: /case\s*'tool_use'\s*:/, msg: "case 'tool_use'（宿主是 'tool-call'）" },
+  { re: /case\s*'tool_result'\s*:/, msg: "case 'tool_result'（宿主是 'tool-result'）" },
+];
+for (const { re, msg } of wrongBlocks) {
+  const hits = all.filter(({ code }) => re.test(code));
+  if (hits.length) bad(`使用了宿主不存在的内容块类型 ${msg}：${hits.map((x) => x.f).join(', ')}`);
+  else ok(`未使用宿主不存在的内容块类型 ${msg.split('（')[0]}`);
+}
+const blockReader = all.find(({ f }) => f.endsWith(path.join('host', 'seams.js')));
+if (!blockReader) bad('未找到 host/seams.js');
+else {
+  const need = [
+    [/case\s*'tool-call'\s*:/, "'tool-call' 块"],
+    [/case\s*'tool-result'\s*:/, "'tool-result' 块"],
+    [/data\.message\?\.content[\s\S]{0,80}data\.content/, 'assistant/tool 事件从 data.message 取内容'],
+  ];
+  const missing = need.filter(([re]) => !re.test(blockReader.code)).map(([, m]) => m);
+  missing.length
+    ? bad(`host/seams.js 未按宿主词汇处理内容块：${missing.join('、')}`)
+    : ok("host/seams.js 按 ContentBlockMap 处理内容块（tool-call / tool-result）");
 }
 
 // 正向：适配器必须真的按宿主词汇取值（只查"没有错"会漏掉"根本没读"）

@@ -376,6 +376,44 @@ web profile 里装好插件后，**指令菜单里没有 `contextvm`**；输入 
 代价：注入规模远低于正常目标（`normalTargetInput`），并未超过硬上限。
 变异验证：把检索候选池清空 → "纯检索路径"用例立刻失败（说明这条断言有牙）。
 
+## 补充：长跑实测暴露的"记忆层几乎为空"（2026-09-17 续七）
+
+在 CDDA 复刻的长跑里（`longrun` profile，sessionMode=active）观察到一个反直觉现象：
+**注入规模并不小**（110 次编译，最小 142 / 中位 1,459 / 最大 11,180 token），但 agent 的记忆
+层几乎是空的。逐层量化后找到三个成因，前两个是真缺陷：
+
+### 1. 工具活动一条都没进记忆（已修）
+
+整个长跑库 `tool_result/tool_request` = **0**。这个 agent 跑了 16+ 轮读文件、改文件、跑测试，
+**一件都没被记住** —— 对编码类长任务，这等于把"我干了什么"整段丢掉，也是"上下文像死的"
+最大来源。两层根因，都是**猜宿主词汇**：
+
+| 层 | 宿主权威定义 | 我们写的 |
+|---|---|---|
+| 事件负载位置 | `tool/result` 的负载在 **`data.message`**（ToolResultMessage） | `data.content` → undefined → 空 → 镜像跳过 |
+| 内容块类型 | `ContentBlockMap`：**`tool-call` / `tool-result`**（连字符） | `tool_use` / `tool_result` → 落进 default → 空 |
+| 工具调用参数 | `arguments`（原始 JSON 串） | `input` |
+
+真机复验：修复后同一路径的任务在库里出现 `tool_result 1`，正文 `[tool-result] 84 engine/turns.py` ✓。
+契约审计新增**正反双向守卫**（块词汇必须与 ContentBlockMap 一致；代码里出现 `tool_use`/
+`tool_result` 即 FAIL）—— 这类错已犯三次（`argumentsText`、`usage`、块名），必须由审计拦住。
+
+### 2. 长期层（episode 摘要）永远为空（已修输入侧）
+
+`closed=5 / summarized=0`。根因两条：
+- **摘要输入把宿主样板也算进去**：一个真实内容仅 3,631 字符的会话，摘要输入实测 **60,565 token**
+  （episode 区间里 55/74 个事件是运行时快照）；
+- **隐藏推理吃掉输出预算**：`output_tokens 4,800` 撞 `max-tokens` → `unparseable_summary`
+  （另有 `llm_failed`：限流）。
+
+已修：摘要输入按 §4.1.1 同一判定**排除宿主托管事件**；纯样板区间直接落标记出队，
+不再永远 pending。上限是否要抬，等输入瘦下来后按实测再定（先修输入，不先抬上限）。
+
+### 3. 抽取滞后（未改）
+
+长回合里 delta 只在轮末跑，队列里常有 2 条待处理（慢模型 + 限流所致）。是否把抽取时机
+提前到"每 N 步"是个设计选择，留待实测后决定。
+
 ## 补充：本轮结构优化（代码审计驱动）
 
 审计工具与结论见 `tools/code-audit.mjs` / `tools/dead-code-check.mjs`。已完成的拆分：

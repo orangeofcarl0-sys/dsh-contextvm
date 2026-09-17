@@ -61,16 +61,24 @@ function makeVm({ llm = fakeLlm([{ text: 'ok' }]) } = {}) {
 }
 
 test('blocksToText：保留文本与工具调用，丢弃 reasoning（§1.3）', () => {
+  // 块类型用宿主 ContentBlockMap 的权威词汇：'tool-call' / 'tool-result'（连字符）、'file'
   const text = blocksToText([
     { type: 'reasoning', text: '这是思维链，必须丢弃' },
     { type: 'text', text: '可见回答' },
-    { type: 'tool_use', name: 'grep', input: { q: 'x' } },
+    { type: 'tool-call', id: 'c1', name: 'grep', arguments: '{"q":"x"}' },
+    { type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'grep 输出' }] },
+    { type: 'tool-result', toolCallId: 'c2', isError: true, content: [{ type: 'text', text: '命令失败' }] },
     { type: 'image' },
+    { type: 'file' },
   ]);
   assert.ok(text.includes('可见回答'));
   assert.ok(!text.includes('思维链'));
-  assert.ok(text.includes('[tool_use grep]'));
+  assert.ok(text.includes('[tool-call grep]'));
+  assert.ok(text.includes('{"q":"x"}'), '工具调用参数是原始 JSON 串（arguments）');
+  assert.ok(text.includes('grep 输出'), '工具结果正文必须被取出（这是长跑里"我干了什么"的唯一来源）');
+  assert.ok(text.includes('[tool-result error]'), '失败结果要标注 isError');
   assert.ok(text.includes('[image]'));
+  assert.ok(text.includes('[file]'));
   assert.equal(blocksToText('直接字符串'), '直接字符串');
 });
 
