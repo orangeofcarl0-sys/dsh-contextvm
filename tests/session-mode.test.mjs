@@ -218,3 +218,21 @@ test('子命令解析：裸命令 = 状态（无副作用），只有 on/off 改
   assert.equal(parseSubcommand('on now'), 'invalid');
   assert.equal(parseSubcommand('status'), 'invalid');
 });
+
+test('命令 MUST 声明 input —— 否则 web 客户端会把带参数的行当普通消息发给模型', () => {
+  // 客户端 matchEnter 规则（dsh-client-ui-commands）：
+  //   desc.input !== undefined → 认领整行并按命令执行；
+  //   否则 `!bare` 时 return undefined → 掉进默认通道（当作消息发给模型）。
+  // 真机症状：`/contextvm on` 被当消息送进模型，用户侧表现为"命令输入无反应"。
+
+  const vm = createContextVm({ rawConfig: {}, dbPath: ':memory:', llm: fakeLlm([{ text: '{}' }]) });
+  try {
+    let def = null;
+    registerStatusCommand({ commands: { register: (d) => { def = d; return () => {}; } } }, vm, {});
+    assert.ok(def.input, '命令 MUST 声明 input，否则带参数的行不会被当作命令');
+    assert.equal(typeof def.input.hint, 'string');
+    assert.ok(def.input.hint.length > 0, 'hint 是客户端 leadingClaim 的输入提示，不能为空');
+  } finally {
+    vm.close();
+  }
+});
