@@ -10,6 +10,10 @@ import {
 } from '../lib/host/seams.js';
 import { createLlmPort } from '../lib/host/llm.js';
 import { fakeLlm } from './helpers.mjs';
+import { setSessionActive } from '../lib/app/session_mode.js';
+
+/** 显式开启某会话（默认休眠是设计行为，测试必须显式开启才走注入/抽取路径）。 */
+const enable = (vm, sessionId) => setSessionActive(vm.db, sessionId, true);
 
 /** 假 Cordis 上下文：记录钩子、提供可注入服务。 */
 function fakeCtx(services = {}) {
@@ -127,6 +131,7 @@ test('注入：assembled.contexts 增加 ContextVM 段落，且窗口按当次�
   });
   try {
     vm.raw.append({ sessionId: 's2', role: 'user', eventType: 'user_message', content: '约束：波长 1064nm' });
+    enable(vm, 's2');
     applySeams(ctx, vm, {});
     const session = fakeSession('s2');
     return (async () => {
@@ -244,13 +249,20 @@ test('轮末：调度 delta 抽取（先写 pending，成功后清空），不�
   }
 });
 
-test('工具注册：注入 defineTool 后注册全部工具（§13.2 + §8.3 + §14），缺失时给出降级警告', () => {
+test('会话级工具生命周期：默认零注册，开启后注册进该 agent 作用域，关闭即释放', () => {
   const vm = makeVm();
   const { ctx, registeredTools } = fakeCtx();
-  applySeams(ctx, vm, {});
+  const seams = applySeams(ctx, vm, {});
+  const defineTool = (opts) => ({ ...opts, __defined: true });
+  seams.setDefineTool(defineTool);
+  const agent = { session: { id: 's-tools' }, ctx: { tools: { register: (t) => { registeredTools.push(t); return () => { registeredTools.splice(registeredTools.indexOf(t), 1); }; } } } };
   try {
-    const defineTool = (opts) => ({ ...opts, __defined: true });
-    const r = seamsRegister(ctx, vm, defineTool);
+    // 默认休眠：**一个工具都不注册**（这是污染隔离的核心 —— schema 不随请求发送）
+    assert.equal(registeredTools.length, 0, '默认 MUST NOT 注册任何工具');
+    assert.equal(seams.toolsActive('s-tools'), false);
+
+    const r = seams.activate(agent);
+    assert.equal(r.ok, true, `激活应成功：${r.reason ?? ''}`);
     assert.deepEqual(r.registered, [
       'contextvm_commit_state',
       'contextvm_exhaustive_scan',
@@ -270,29 +282,39 @@ test('工具注册：注入 defineTool 后注册全部工具（§13.2 + §8.3 + 
       assert.ok(t.output.schema.properties.source_event_ids, `${t.name} 缺少 source_event_ids`);
       assert.ok(t.output.schema.properties.truncated, `${t.name} 缺少 truncated 标记`);
     }
+    assert.equal(seams.toolsActive('s-tools'), true);
+    // 重复激活是幂等的（不应重复注册）
+    assert.equal(seams.activate(agent).ok, true);
+    assert.equal(registeredTools.length, 8, '重复激活 MUST NOT 重复注册');
 
+    // 关闭：释放该会话的注册，其它会话不受影响
+    assert.equal(seams.deactivate('s-tools').released, 8);
+    assert.equal(registeredTools.length, 0, '关闭后 MUST 释放注册');
+    assert.equal(seams.toolsActive('s-tools'), false);
+  } finally {
+    vm.close();
+  }
+});
+
+test('会话级工具生命周期：拿不到 agent 作用域时如实失败，MUST NOT 全局兜底', () => {
+  const vm = makeVm();
+  const { ctx, registeredTools } = fakeCtx();
+  const seams = applySeams(ctx, vm, {});
+  seams.setDefineTool((def) => def);
+  try {
+    // agent 没有 ctx.tools：宁可失败也不能退化成全局注册（那会悄悄破坏隔离）
+    const r = seams.activate({ session: { id: 's-noScope' } });
+    assert.equal(r.ok, false);
+    assert.ok(/作用域/.test(r.reason), `理由应点明作用域问题，实际：${r.reason}`);
+    assert.equal(registeredTools.length, 0, 'MUST NOT 全局兜底注册');
+
+    // defineTool 未就绪时同样如实失败
     const vm2 = makeVm();
     const c2 = fakeCtx();
-    const s2 = applySeams(c2.ctx, vm2, {});
-    const r2 = s2.registerTool(undefined);
-    assert.deepEqual(r2.registered, []);
-    assert.ok(s2.warnings.some((w) => w.includes('文本 JSON 路径')));
-
-    // 契约：registerTool 必须**自己**回传本次告警。真机上调用方读的是 r.warnings，
-    // 而它当时不存在 → 每次挂载都抛 "r.warnings is not iterable"，被 catch 吞成
-    // "工具未注册"，于是即使 8 个工具全部注册成功也照样报降级。诊断说谎比没有诊断更坏。
-    assert.ok(Array.isArray(r2.warnings), 'registerTool 必须回传 warnings 数组');
-    assert.equal(r2.warnings.length, 1, '本次调用的告警应恰好一条');
-    assert.ok(r2.warnings[0].includes('文本 JSON 路径'));
-
-    const vm3 = makeVm();
-    const c3 = fakeCtx();
-    const s3 = applySeams(c3.ctx, vm3, {});
-    const r3 = s3.registerTool((def) => def);
-    assert.deepEqual(r3.warnings, [], '注册成功时不应有本次告警');
-    assert.equal(r3.registered.length, 8, '成功路径应报满 8 个工具');
-    assert.equal(s3.warnings.length, 0, '成功路径不应往全局 warnings 里塞东西');
-    vm3.close();
+    const seams2 = applySeams(c2.ctx, vm2, {});
+    const r2 = seams2.activate({ session: { id: 's2' }, ctx: { tools: { register: () => () => {} } } });
+    assert.equal(r2.ok, false);
+    assert.ok(/定义器/.test(r2.reason));
     vm2.close();
   } finally {
     vm.close();

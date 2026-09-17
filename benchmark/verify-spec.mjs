@@ -63,6 +63,14 @@ check('规范要求无来源即拒收', /next_action_without_source/.test(s));
 check('规范要求拒绝宿主样板来源的 upsert', /source_is_host_context/.test(s));
 check('规范指出验收语料必须覆盖 next_action', /验收语料 MUST 覆盖 `next_action` 路径/.test(s));
 
+// 工具门控（§13.2.1）：规范必须写明按会话注册与休眠语义
+check('规范含 §13.2.1 工具按会话注册', /### 13\.2\.1 工具 MUST 按会话注册/.test(s));
+check('规范写明默认休眠=请求零足迹', /请求层面\*\*零足迹\*\*/.test(s));
+check('规范禁止全局兜底注册', /MUST NOT 退化为全局注册/.test(s));
+check('规范要求输出契约与工具同生共死', /输出契约与工具 MUST 同生共死/.test(s));
+const modePath = path.resolve(import.meta.dirname, '..', 'lib', 'app', 'session_mode.js');
+check('会话模式模块存在', fs.existsSync(modePath));
+
 const pf = 1.693;
 check('预检断言 ratio*cap <= 0.98', pf * r.cap <= 0.98, `${(pf * r.cap).toFixed(3)}`);
 check('v1.0 两档落在预检上限外（故必然 400）', pf * 0.649 > 0.98 && pf * 0.782 > 0.98,

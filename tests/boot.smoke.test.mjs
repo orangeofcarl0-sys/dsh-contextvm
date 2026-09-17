@@ -110,6 +110,11 @@ test('启动冒烟：完整走一轮（镜像 → 注入 → delta → episode �
   const { vm } = plugin;
   await new Promise((r) => setTimeout(r, 20));
 
+  // 默认休眠是设计行为（工具/注入/抽取都要用户显式开启才生效）；
+  // 这一轮冒烟要验的是"开启之后整条链路能跑通"，故先开启本会话。
+  const { setSessionActive } = await import('../lib/app/session_mode.js');
+  setSessionActive(vm.db, S, true);
+
   const session = {
     id: S,
     requestHeader: () => ({ provider: 'openrouter-stealth', model: 'stealth/union-alpha' }),

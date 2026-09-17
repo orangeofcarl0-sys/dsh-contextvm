@@ -58,6 +58,20 @@ dsh plugin --profile <profile> add "github:orangeofcarl0-sys/dsh-contextvm"
 [contextvm] 路由 openrouter-stealth/stealth/union-alpha: 声明窗口 262,144
 ```
 
+**默认休眠，按会话显式开启。** 装上插件后它不会立刻接管任何东西：不注册工具、不注入内容、
+不做后台抽取 —— 未开启的会话在请求层面**零足迹**。要用的时候，在需要它的那个会话里执行一次：
+
+```
+/contextvm on      # 开启本会话：工具注册进本会话（仅本会话可见），开始注入与轮末抽取
+/contextvm         # 查看状态（含当前模式）
+/contextvm off     # 关闭本会话
+```
+
+为什么这么设计：工具 schema 会随注册进入**该 profile 下每个会话**的每个请求。实测 8 个工具的
+schema 合计约 1200–1433 token，比插件注入的上下文（82–257 token）贵一个量级，而其中 **77% 是
+JSON 结构本身**（描述只占 280、`commit_state` 的枚举只占 64）。改成按会话注册后，污染隔离是
+结构性的；代价只是这一次显式操作。
+
 **宿主托管上下文不会被重复注入。** 宿主自己注入的运行时上下文快照与技能目录会被正常索引
 （可检索、可追溯），但**不会**再作为"最近原文"或"检索证据"注入回去——它们本就在宿主的提示词里。
 真机实测这些样板曾占某会话镜像内容的 98%，使注入的 5860 token 中只有 31 token 是真正的
@@ -112,7 +126,7 @@ ratios:
 ## 测试
 
 ```bash
-npm test                # 全部审计与验收测试（204 项，默认串行）
+npm test                # 全部审计与验收测试（211 项，默认串行）
 npm run test:parallel   # 同上但并行（更快，供快速迭代）
 npm run test:acceptance # 只跑 1M 语料与 Phase A 验收
 npm run audit:host      # 宿主契约实机审计（需本机安装 DSH；核对接口、工具 schema、文档化参数）

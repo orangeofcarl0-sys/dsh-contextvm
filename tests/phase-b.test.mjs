@@ -317,8 +317,10 @@ test('轮末钩子推进 episode 且不影响回答（§15.2 非关键路径）'
     tools: { register() {} },
   };
   const { applySeams } = await import('../lib/host/seams.js');
+  const { setSessionActive } = await import('../lib/app/session_mode.js');
   try {
     vm.runtime.setWindow(S, W);
+    setSessionActive(vm.db, S, true); // 默认休眠是设计行为：测试需显式开启才会走轮末路径
     applySeams(ctx, vm, {});
     fill(vm, S, { tokens: budgets.episode.targetRaw + 500 });
 
