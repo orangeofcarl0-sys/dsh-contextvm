@@ -1,0 +1,58 @@
+{
+  "model": "stealth/union-alpha",
+  "context_window": 262144,
+  "measured_at": "2026-09-16T17:41:40.410Z",
+  "probes": [
+    {
+      "requested": 191889,
+      "status": 400,
+      "ok": false,
+      "ms": 1351,
+      "message": "This endpoint's maximum context length is 262144 tokens. However, you requested about 324789 tokens (324781 of text input, 8 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.",
+      "raw": "{\"provider_name\":null}"
+    },
+    {
+      "requested": 140000,
+      "status": 200,
+      "ok": false,
+      "ms": 48386,
+      "message": "ERROR",
+      "raw": "{\"error_type\":\"provider_unavailable\"}"
+    },
+    {
+      "requested": 160000,
+      "status": 400,
+      "ok": false,
+      "ms": 790,
+      "message": "This endpoint's maximum context length is 262144 tokens. However, you requested about 270817 tokens (270809 of text input, 8 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.",
+      "raw": "{\"provider_name\":null}"
+    },
+    {
+      "requested": 170000,
+      "status": 400,
+      "ok": false,
+      "ms": 353,
+      "message": "This endpoint's maximum context length is 262144 tokens. However, you requested about 287742 tokens (287734 of text input, 8 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.",
+      "raw": "{\"provider_name\":null}"
+    },
+    {
+      "requested": 176000,
+      "status": 400,
+      "ok": false,
+      "ms": 247,
+      "message": "This endpoint's maximum context length is 262144 tokens. However, you requested about 297897 tokens (297889 of text input, 8 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.",
+      "raw": "{\"provider_name\":null}"
+    },
+    {
+      "requested": 184000,
+      "status": 400,
+      "ok": false,
+      "ms": 190,
+      "message": "This endpoint's maximum context length is 262144 tokens. However, you requested about 311437 tokens (311429 of text input, 8 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.",
+      "raw": "{\"provider_name\":null}"
+    }
+  ],
+  "observed_max_servable_input_tokens": 0,
+  "observed_min_rejected_input_tokens": 140000,
+  "implied_max_servable_ratio_of_W": 0
+}

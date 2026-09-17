@@ -1,0 +1,11 @@
+{
+  "working_auth": "x-api-key + session",
+  "tested": [
+    "x-api-key + session",
+    "x-api-key 无 session",
+    "Bearer + session（前次失败）",
+    "两者都给 + session"
+  ],
+  "model": "union-alpha",
+  "base": "https://opencode.ai/zen/go/v1"
+}

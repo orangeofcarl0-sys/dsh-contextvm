@@ -1,0 +1,14 @@
+########## 1. 容量拒绝的完整正文 ##########
+  http = 400 | chars = 1354000 | 该估算器声称 5.0 chars/token 推算 = 270800
+  完整正文:
+  {"type":"error","error":{"type":"invalid_request_error","message":"Error from provider (Console Go): Upstream request failed: [invalid_request_error] Prompt too long: about 270882 tokens estimated, but the maximum context length is 262144 tokens including the completion. Reduce the length of the messages."}}
+
+########## 2. 流式响应真实格式（前 2000 字节原始） ##########
+  http = 200 | content-type = text/event-stream
+  首 0 字节（15003ms 内）：
+  
+
+########## 3. 非流式 256 输出的 decode TPS（usage 可信路径） ##########
+  #1 http=200 out=256 total=92.9s stop=max_tokens TPS(含TTFT)=2.75 cost="0"
+  #2 http=200 out=256 total=83.1s stop=max_tokens TPS(含TTFT)=3.08 cost="0"
+  上界 TPS 中位 = 3.08（含固定开销，故为下界）

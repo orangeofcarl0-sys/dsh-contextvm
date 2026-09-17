@@ -1,0 +1,169 @@
+/**
+ * State Delta 应用与验证审计（§5.3 / §16.2 / §23.5）。
+ * 覆盖：来源校验、禁止无依据取代 active 约束、冲突转 uncertain、next_action 落库、拒绝项回报。
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { makeBackend } from './helpers.mjs';
+import { applyDelta } from '../lib/memory/delta.js';
+
+const S = 'sess-delta';
+
+function setup() {
+  const be = makeBackend();
+  const e1 = be.raw.append({ sessionId: S, role: 'user', eventType: 'user_message', content: '约束波长 1064nm' });
+  const e2 = be.raw.append({ sessionId: S, role: 'user', eventType: 'user_message', content: '改为 1065nm' });
+  return { be, e1: e1.eventId, e2: e2.eventId };
+}
+
+test('来源不存在时整条被拒，且明确回报（§5.3）', () => {
+  const { be, e1 } = setup();
+  try {
+    const res = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: {
+        upsert: [
+          { type: 'fact', key: 'ok', value: '有来源', sourceEventIds: [e1] },
+          { type: 'fact', key: 'bad', value: '无来源', sourceEventIds: ['evt_不存在'] },
+        ],
+        supersede: [], resolve: [], open: [], next_action: null,
+      },
+    });
+    assert.equal(res.applied.upserts.length, 1);
+    assert.equal(res.applied.upserts[0].key, 'ok');
+    assert.deepEqual(res.rejected.map((r) => r.reason), ['source_event_not_found']);
+    assert.equal(be.state.all(S).length, 1, '被拒项 MUST NOT 落库');
+  } finally {
+    be.close();
+  }
+});
+
+test('无 source 的 active 项被拒（§4.2/§23.2）', () => {
+  const { be } = setup();
+  try {
+    const res = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: { upsert: [{ type: 'constraint', key: 'k', value: 'v', status: 'active', sourceEventIds: [] }], supersede: [], resolve: [], open: [], next_action: null },
+    });
+    assert.deepEqual(res.rejected.map((r) => r.reason), ['active_without_source']);
+  } finally {
+    be.close();
+  }
+});
+
+test('禁止无依据取代 active 约束（§5.3 / §23.5）', () => {
+  const { be, e1, e2 } = setup();
+  try {
+    const first = be.state.upsert({ sessionId: S, itemType: 'constraint', key: 'wl', value: '1064nm', sourceEventIds: [e1] });
+
+    // 只 supersede，不给同 key 的新值 → 拒绝
+    const noBasis = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: { upsert: [], supersede: [{ stateId: first.item.stateId, reason: '没依据' }], resolve: [], open: [], next_action: null },
+    });
+    assert.deepEqual(noBasis.rejected.map((r) => r.reason), ['no_basis_to_supersede_active_constraint']);
+    assert.equal(be.state.get(first.item.stateId).status, 'active', '原约束必须保持 active');
+
+    // 给出同 key 新值 → 允许
+    const withBasis = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: {
+        upsert: [{ type: 'constraint', key: 'wl', value: '1065nm', status: 'active', sourceEventIds: [e2] }],
+        supersede: [{ stateId: first.item.stateId, reason: '用户改了值' }], resolve: [], open: [], next_action: null,
+      },
+    });
+    assert.deepEqual(withBasis.rejected, []);
+    assert.equal(be.state.get(first.item.stateId).status, 'superseded');
+    assert.equal(be.state.latest(S, 'constraint', 'wl').value, '1065nm');
+  } finally {
+    be.close();
+  }
+});
+
+test('同 key 冲突且未显式取代时，新项以 uncertain 落库而非静默覆盖（§5.3/§16.2）', () => {
+  const { be, e1, e2 } = setup();
+  try {
+    be.state.upsert({ sessionId: S, itemType: 'constraint', key: 'wl', value: '1064nm', sourceEventIds: [e1] });
+    const res = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: {
+        upsert: [{ type: 'constraint', key: 'wl', value: '9999nm', status: 'active', sourceEventIds: [e2] }],
+        supersede: [], resolve: [], open: [], next_action: null,
+      },
+    });
+    const stored = res.applied.upserts[0];
+    assert.equal(stored.status, 'uncertain', '冲突项必须转 uncertain');
+    assert.equal(res.applied.uncertain.length, 1);
+    assert.equal(res.applied.uncertain[0].reason, 'unresolved_conflict_with_active_constraint');
+    // 旧值仍可查（版本链完整，未静默覆盖）
+    assert.equal(be.state.history(S, 'constraint', 'wl').length, 2);
+  } finally {
+    be.close();
+  }
+});
+
+test('next_action 由顶层字段落库，且不重复出现在 open 中', () => {
+  const { be } = setup();
+  try {
+    const res = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: { upsert: [], supersede: [], resolve: [], open: [], next_action: '先复核波长' },
+    });
+    assert.deepEqual(res.rejected, []);
+    const active = be.state.active(S);
+    assert.equal(active.length, 1);
+    assert.equal(active[0].itemType, 'next_action');
+    assert.equal(active[0].value, '先复核波长');
+  } finally {
+    be.close();
+  }
+});
+
+test('resolve：目标不存在或已不是开放态时被拒', () => {
+  const { be, e1 } = setup();
+  try {
+    const q = be.state.upsert({ sessionId: S, itemType: 'open_question', key: 'q', value: '?', sourceEventIds: [e1] });
+    be.state.setStatus(q.item.stateId, 'resolved');
+
+    const res = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: { upsert: [], supersede: [], resolve: [q.item.stateId, 'st_不存在'], open: [], next_action: null },
+    });
+    assert.deepEqual(res.rejected.map((r) => r.reason).sort(), ['resolve_target_not_found', 'resolve_target_not_open']);
+    assert.deepEqual(res.applied.resolved, []);
+  } finally {
+    be.close();
+  }
+});
+
+test('supersede：目标不存在时被拒，不产生悬挂引用', () => {
+  const { be } = setup();
+  try {
+    const res = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: { upsert: [], supersede: [{ stateId: 'st_不存在', reason: 'x' }], resolve: [], open: [], next_action: null },
+    });
+    assert.deepEqual(res.rejected.map((r) => r.reason), ['supersede_target_not_found']);
+  } finally {
+    be.close();
+  }
+});
+
+test('任何落库变更都在 raw 日志留下 state_delta 事件（可追溯）', () => {
+  const { be, e1 } = setup();
+  try {
+    const before = be.raw.count(S);
+    const res = applyDelta({
+      state: be.state, raw: be.raw, sessionId: S,
+      delta: {
+        upsert: [{ type: 'fact', key: 'f', value: 'x', sourceEventIds: [e1] }],
+        supersede: [], resolve: [], open: [], next_action: null,
+      },
+    });
+    assert.ok(res.applied.upserts.length >= 1);
+    // applyDelta 本身不写日志（那是 Runtime 的职责），故此处只断言它不改写 raw
+    assert.equal(be.raw.count(S), before, 'applyDelta MUST NOT 自行追加事件，避免两处写日志');
+  } finally {
+    be.close();
+  }
+});

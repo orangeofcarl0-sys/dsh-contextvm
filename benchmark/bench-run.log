@@ -1,0 +1,39 @@
+
+########## 阶段 0：token 估算校准（§25 按语种） ##########
+ ascii: chars/token median=3.546 range=[3.546, 3.546] n=6
+   chars/4 相对实际 token 数的低估倍数 = 1.128
+ cjk: chars/token median=2.012 range=[1.178, 2.012] n=6
+   chars/4 相对实际 token 数的低估倍数 = 1.988
+ 推荐 estimator_margin（chars/4 输入下）= 0.5
+
+########## 阶段 1：输出长度与 decode TPS（§2.3） ##########
+  max_tokens=128 try1: out=128 total=13.0s tps=9.86
+  max_tokens=128 try2: out=128 total=18.8s tps=6.80
+  max_tokens=256 try1: out=256 total=53.0s tps=4.83
+  max_tokens=256 try2: out=256 total=22.6s tps=11.32
+  max_tokens=512 try1: out=512 total=40.9s tps=12.51
+  max_tokens=512 try2: out=512 total=62.2s tps=8.24
+ decode TPS: min=4.828 median=9.855 max=12.509
+
+########## 阶段 2：prefill / TTFT（比例档位，自适应校准尺寸） ##########
+  3.1%W -> 目标 8126 tokens
+    iter1: chars=32504 actual_tokens=4803 (目标 8126, 偏差 -40.9%) TTFT=9.8s@content total=9.8s
+    iter2: chars=54992 actual_tokens=8122 (目标 8126, 偏差 -0.1%) TTFT=27.3s@content total=27.3s
+  12.2%W -> 目标 31982 tokens
+    iter1: chars=127928 actual_tokens=18803 (目标 31982, 偏差 -41.2%) TTFT=17.6s@content total=17.6s
+    iter2: chars=217593 actual_tokens=31991 (目标 31982, 偏差 0.0%) TTFT=32.8s@content total=32.8s
+  24.4%W -> 目标 63963 tokens
+    iter1: chars=255852 actual_tokens=37613 (目标 63963, 偏差 -41.2%) TTFT=8.0s@content total=8.0s
+    !! stream 502 provider_unavailable
+  48.8%W -> 目标 127926 tokens
+    !! stream 502 provider_unavailable
+
+########## 阶段 3：并发（§2.3） ##########
+  n=1: wall=10.66s ok=1/1 agg_tps=4.034 lat=[10.7]
+  n=2: wall=8s ok=2/2 agg_tps=15.871 lat=[2.9,8]
+  n=4: wall=6.17s ok=4/4 agg_tps=27.899 lat=[5.9,6.1,6.2,6.2]
+
+########## 完成（phases: calib,tps,prefill,concurrency）##########
+requests=32 errors=2 -> F:\Codex_Work_Space\DSH plugin\ContextVM\benchmark\benchmark_report.json
+ratios: normal=0.458 heavy=0.649
+max_concurrency=4 decode_tps.median=9.855

@@ -1,0 +1,19 @@
+########## A. 小调用基线 + usage 是否可信 ##########
+  tiny                     200    51.3s in=10 cache=12 out=5 stop=end_turn
+  tiny-with-system         200    45.3s in=30 cache=0 out=5 stop=end_turn
+
+########## B. 输入规模扫描（找上限 + 验 usage 线性） ##########
+  ~2000 tok (13540 chars)  200    58.0s in=- cache=- out=- stop=-
+  ~20000 tok (135400 chars) 200    52.3s in=- cache=- out=- stop=-
+  ~60000 tok (406200 chars) 200    38.4s in=- cache=- out=- stop=-
+  ~120000 tok (812400 chars) 200    50.9s in=- cache=- out=- stop=-
+  ~200000 tok (1354000 chars) 400     2.5s in=- cache=- out=- stop=-  ERR: {"type":"error","error":{"type":"invalid_request_error","message":"Error from provider (Console Go): Upstream request failed: [invalid_request_error] Prompt too long: about 270886 tokens estimated, bu
+  -> 出现容量类拒绝，继续向上确认是否为硬上限
+  ~250000 tok (1692500 chars) 400     2.1s in=- cache=- out=- stop=-  ERR: {"type":"error","error":{"type":"invalid_request_error","message":"Error from provider (Console Go): Upstream request failed: [invalid_request_error] Prompt too long: about 338586 tokens estimated, bu
+  -> 出现容量类拒绝，继续向上确认是否为硬上限
+
+########## C. decode TPS（256 输出，与 OpenRouter 可比） ##########
+  tps#1                    200    64.3s in=- cache=- out=- stop=-
+  tps#2                    200    50.6s in=- cache=- out=- stop=-
+
+已写入 benchmark/opencode-union-measure.json

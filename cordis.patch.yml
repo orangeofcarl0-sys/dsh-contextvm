@@ -1,0 +1,21 @@
+# dsh-contextvm bundle patch：把 ContextVM 插入 profile。
+#
+# 作为 dsh.bundle.patch 被 dsh 加载器消费。insert 引用本包（dsh-contextvm），
+# 加载器会从 profile 的 node_modules 解析它并加载为 Cordis 插件。
+#
+# 这里**只写必须显式声明的项**；预算比例、输出上限、检索参数等一律由
+# lib/app/config.js 的 DEFAULTS 提供，并在启动时经 validateInvariants 校验。
+# 刻意不在此重复默认值：两处各写一份必然会漂移，而本项目的硬要求是
+# "同一事实只有一处定义"。
+# 需要覆盖某项时在此写，config.js 的深合并会按字段覆盖默认值。
+- insert:
+    - id: dsh-contextvm
+      name: dsh-contextvm
+      config:
+        # 数据库文件位置：null 表示 <dshHome>/contextvm/contextvm.db
+        dbPath: null
+        # 模型路由：MUST 与 settings.yaml 中的 provider 路由键一致。
+        # 物理窗口 W 由 llm.resolveModelInfo() 按请求解析，此处不写死窗口（规范 §2.1）。
+        route:
+          provider: openrouter-stealth
+          model: stealth/union-alpha

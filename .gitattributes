@@ -1,0 +1,8 @@
+# 统一以 LF 入库，避免 Windows/macOS 之间反复改写整文件（曾产生大量无意义 diff）
+* text=auto eol=lf
+
+# 二进制/文档：不做行尾转换与 diff
+*.docx binary
+*.png  binary
+*.jpg  binary
+*.db   binary

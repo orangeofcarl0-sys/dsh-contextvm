@@ -1,0 +1,13 @@
+目标 token  尝试  结果
+    31982  #1   OK   actual=31763 TTFT=- 
+    63963  #1   OK   actual=63465 TTFT=6.3s 
+   127926  #1   OK   actual=127101 TTFT=7.3s 
+   191889  #1   FAIL actual=? TTFT=- http400
+   191889  #2   FAIL actual=? TTFT=- http400
+   191889  #3   FAIL actual=? TTFT=- http400
+
+结论：
+  12.2%W (31982): first-try-ok
+  24.4%W (63963): first-try-ok
+  48.8%W (127926): first-try-ok
+  73.2%W (191889): fail-all-attempts

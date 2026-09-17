@@ -1,0 +1,18 @@
+=== 192k 报错正文（定位上游声明的原因） ===
+{
+  "requested": 191889,
+  "status": 400,
+  "ok": false,
+  "ms": 1351,
+  "message": "This endpoint's maximum context length is 262144 tokens. However, you requested about 324789 tokens (324781 of text input, 8 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.",
+  "raw": "{\"provider_name\":null}"
+}
+
+=== 二分定位边界 ===
+  140000 tokens: FAIL 200 actual=- 48.4s "ERROR"
+  160000 tokens: FAIL 400 actual=- 0.8s "This endpoint's maximum context length is 262144 tokens. However, you requested about 270817 tokens (270809 of text input, 8 in the output). Please reduce the length of either one, or use the context
+  170000 tokens: FAIL 400 actual=- 0.4s "This endpoint's maximum context length is 262144 tokens. However, you requested about 287742 tokens (287734 of text input, 8 in the output). Please reduce the length of either one, or use the context
+  176000 tokens: FAIL 400 actual=- 0.2s "This endpoint's maximum context length is 262144 tokens. However, you requested about 297897 tokens (297889 of text input, 8 in the output). Please reduce the length of either one, or use the context
+  184000 tokens: FAIL 400 actual=- 0.2s "This endpoint's maximum context length is 262144 tokens. However, you requested about 311437 tokens (311429 of text input, 8 in the output). Please reduce the length of either one, or use the context
+
+观测：最大可服务输入 ≈ 0 tokens（0.0%W）；最小被拒输入 = 140000

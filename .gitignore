@@ -1,0 +1,22 @@
+# 依赖（本项目的测试不依赖 node_modules；宿主包由 DSH profile 提供）
+node_modules
+
+# 中间版本（规范的历史快照，MD 的变更摘要已记录全部改动）
+_superseded/
+
+# 运行时数据：插件自有 SQLite 库与其 WAL/SHM
+*.db
+*.db-wal
+*.db-shm
+
+# 环境与密钥（凭据由宿主 .credentials.yaml 提供，绝不入库）
+.env
+*.key
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/

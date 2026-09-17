@@ -1,0 +1,70 @@
+{
+  "name": "dsh-contextvm",
+  "version": "0.1.0",
+  "description": "ContextVM — 给低 TPS／小窗口免费模型的外部上下文虚拟化层（DSH 插件）：raw 永不删、state 显式版本化、普通请求按需检索、完整性请求分块穷举扫描",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "context",
+    "memory",
+    "virtualization",
+    "sqlite",
+    "fts5"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "compatibility": {
+      "node": ">=22.5.0",
+      "dsh": ">=0.1.0"
+    },
+    "permissions": {
+      "summary": "在插件自有数据目录下维护一个 SQLite 索引（node:sqlite，内置 FTS5）与状态库：为会话提供权威状态投影、lexical 检索、episode 摘要与全局穷举扫描。原始历史真相源仍是宿主 session log，本插件不复制、不改写、不删除它。模型调用一律经宿主 llm 服务，不直连上游；不额外写工作区文件。",
+      "commands": [],
+      "writePaths": [],
+      "externalServices": "none",
+      "failureBoundaries": "数据库不可用 → 以 LOCAL 降级并明确报告；索引缺失 → 可重建（raw 在宿主 session log 中）；embedding 关闭 → 自动降级为 FTS + metadata（语义检索非必需）；上游容量拒绝 → 按 §9.1.1 自适应收缩后重试，超限则降级 LOCAL 并报告。",
+      "lifecycleEvidence": "docs/store-evidence.md"
+    }
+  },
+  "files": [
+    "lib/",
+    "cordis.patch.yml",
+    "README.md",
+    "docs/",
+    "LICENSE",
+    "benchmark/",
+    "tests/",
+    "tools/"
+  ],
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"tests/**/*.test.mjs\"",
+    "test:parallel": "node --test \"tests/**/*.test.mjs\"",
+    "test:acceptance": "node --test --test-concurrency=1 tests/acceptance.1m.test.mjs tests/acceptance.phase-a.test.mjs",
+    "audit:code": "node tools/code-audit.mjs",
+    "audit:dead": "node tools/dead-code-check.mjs",
+    "check": "node --check lib/index.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orangeofcarl0-sys/dsh-contextvm.git"
+  },
+  "homepage": "https://github.com/orangeofcarl0-sys/dsh-contextvm#readme",
+  "bugs": {
+    "url": "https://github.com/orangeofcarl0-sys/dsh-contextvm/issues"
+  },
+  "author": "orangeofcarl0-sys"
+}

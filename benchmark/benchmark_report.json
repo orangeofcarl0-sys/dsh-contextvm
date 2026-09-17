@@ -1,0 +1,196 @@
+{
+  "model": "stealth/union-alpha",
+  "context_window": 262144,
+  "benchmark_version": 2,
+  "phases_run": [
+    "calib",
+    "tps",
+    "prefill",
+    "concurrency"
+  ],
+  "measured_at": "2026-09-16T17:27:01.623Z",
+  "partial_run": true,
+  "estimator_calibration": {
+    "ascii": {
+      "samples": 6,
+      "chars_per_token_median": 3.546,
+      "chars_per_token_min": 3.546,
+      "chars_per_token_max": 3.546,
+      "naive_chars_div_4_underestimate_ratio": 1.128
+    },
+    "cjk": {
+      "samples": 6,
+      "chars_per_token_median": 2.012,
+      "chars_per_token_min": 1.178,
+      "chars_per_token_max": 2.012,
+      "naive_chars_div_4_underestimate_ratio": 1.988
+    },
+    "recommended_estimator_margin": 0.5,
+    "note": "chars/token 含 role 模板开销。margin 为\"chars/4 输入下避免溢出所需的最小余量\"，生产实现应改用宿主 tokenMeter + 语种系数并在线滚动校准（§9.6），不应依赖本余量。"
+  },
+  "output_length_tests": [
+    {
+      "max_tokens": 128,
+      "samples": 2,
+      "tps_median": 9.855,
+      "tps_min": 6.802,
+      "tps_max": 9.855
+    },
+    {
+      "max_tokens": 256,
+      "samples": 2,
+      "tps_median": 11.318,
+      "tps_min": 4.828,
+      "tps_max": 11.318
+    },
+    {
+      "max_tokens": 512,
+      "samples": 2,
+      "tps_median": 12.509,
+      "tps_min": 8.237,
+      "tps_max": 12.509
+    }
+  ],
+  "decode_tps": {
+    "samples": 6,
+    "min": 4.828,
+    "median": 9.855,
+    "max": 12.509
+  },
+  "prefill_tests": [
+    {
+      "ratio_of_W": 0.031,
+      "target_tokens": 8126,
+      "chars": 54992,
+      "iteration": 2,
+      "actual_prompt_tokens": 8122,
+      "actual_chars_per_token": 6.771,
+      "deviation": -0.0005,
+      "ttft_ms": 27252,
+      "ttft_field": "content",
+      "total_ms": 27257,
+      "status": 200,
+      "error": null
+    },
+    {
+      "ratio_of_W": 0.122,
+      "target_tokens": 31982,
+      "chars": 217593,
+      "iteration": 2,
+      "actual_prompt_tokens": 31991,
+      "actual_chars_per_token": 6.802,
+      "deviation": 0.0003,
+      "ttft_ms": 32806,
+      "ttft_field": "content",
+      "total_ms": 32811,
+      "status": 200,
+      "error": null
+    },
+    {
+      "ratio_of_W": 0.244,
+      "target_tokens": 63963,
+      "chars": 435091,
+      "iteration": 2,
+      "error": "stream 502 provider_unavailable",
+      "status": 200,
+      "total_ms": 92935
+    },
+    {
+      "ratio_of_W": 0.488,
+      "target_tokens": 127926,
+      "chars": 511704,
+      "iteration": 1,
+      "error": "stream 502 provider_unavailable",
+      "status": 200,
+      "total_ms": 44591
+    }
+  ],
+  "concurrency_tests": [
+    {
+      "concurrency": 1,
+      "wall_s": 10.66,
+      "succeeded": 1,
+      "failed": 0,
+      "total_output_tokens": 43,
+      "aggregate_tps": 4.034,
+      "per_request_latency_s": [
+        10.7
+      ],
+      "errors": []
+    },
+    {
+      "concurrency": 2,
+      "wall_s": 8,
+      "succeeded": 2,
+      "failed": 0,
+      "total_output_tokens": 127,
+      "aggregate_tps": 15.871,
+      "per_request_latency_s": [
+        2.9,
+        8
+      ],
+      "errors": []
+    },
+    {
+      "concurrency": 4,
+      "wall_s": 6.17,
+      "succeeded": 4,
+      "failed": 0,
+      "total_output_tokens": 172,
+      "aggregate_tps": 27.899,
+      "per_request_latency_s": [
+        5.9,
+        6.1,
+        6.2,
+        6.2
+      ],
+      "errors": []
+    }
+  ],
+  "recommended_ratios": {
+    "normal_target_input": 0.458,
+    "heavy_target_input": 0.5,
+    "hard_input_cap": 0.55,
+    "global_chunk_target": 0.305,
+    "preflight_ratio_assumed": 1.693,
+    "basis": "受 §9.1.1 网关预检夹取；见 preflight_calibration"
+  },
+  "recommended_absolute": {
+    "max_concurrency": 4,
+    "global_worker_output_max_tokens": 300,
+    "episode_raw_ceiling": [
+      64000,
+      32000,
+      80000
+    ]
+  },
+  "error_rate": {
+    "requests": 32,
+    "phase_errors": 2,
+    "rate": 0.0625,
+    "samples": [
+      {
+        "err": "stream 502 provider_unavailable",
+        "status": 200
+      },
+      {
+        "err": "stream 502 provider_unavailable",
+        "status": 200
+      }
+    ]
+  },
+  "preflight_calibration": {
+    "gatekeeper_over_real_ratio": 1.693,
+    "observed_max_servable_real_tokens": 146820,
+    "observed_max_servable_ratio_of_W": 0.5601,
+    "note": "OpenRouter 预检以独立估算器计 token，对同一文本比真实分词器保守约 1.7 倍（该模型 tokenizer 为 Other，网关无从得知真实分词）。故声明窗口 262144 不是可用输入上限；可用输入由预检估算器决定，且随文本可压缩性变化。"
+  },
+  "derivation_notes": [
+    "保留文档基线的 normal（TTFT 数据不足，§17.2 策略未触发）",
+    "实测可服务 0.5601 → hard cap = 0.55（× 安全系数 0.98，§9.1.1）；heavy 取 hard 的 0.9 以维持偏序（§9.1）",
+    "decode TPS 中位 9.855 → worker 输出上限保持 300（§17.1）",
+    "并发聚合吞吐在 n=4 达峰（27.899 TPS）→ max_concurrency=4"
+  ],
+  "rebuilt_at": "2026-09-17T03:03:02.380Z",
+  "rebuild_note": "已合并 preflight-limit.json 的预检标定并重算推荐比例（确定性，无上游调用）"
+}
