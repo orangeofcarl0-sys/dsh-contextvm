@@ -457,3 +457,32 @@ test('来源分类：form 会带进索引元数据，便于后续排除宿主样
   assert.equal(mapped.content, 'Current runtime context');
   assert.deepEqual(mapped.metadata, { sourceKind: 'plugin', contextForm: 'snapshot' });
 });
+
+test('lastTurn：MUST NOT 把宿主注入的合成上下文当成"本轮用户查询"（真机缺陷回归）', () => {
+  // 真机实测（web 长对话实验）：宿主把运行时快照也写成 user/message，lastTurn 按事件类型
+  // 取最后一条 user/message → 增量抽取的"用户查询"变成
+  // "Current runtime context. This snapshot supersedes …"，导致 unparseable、
+  // 单次输出 2500 token 的畸形推理、状态项始终为 0。
+  const events = [
+    { type: 'user/message', seq: 1, data: { content: [{ type: 'text', text: '真正的用户问题' }], source: { kind: 'user' } } },
+    { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: '真正的回答' }] } } },
+    // 宿主注入的合成上下文：同为 user/message，但 source.kind 是 plugin
+    { type: 'user/message', seq: 3, data: { content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes …' }], source: { kind: 'plugin', form: 'snapshot' } } },
+    { type: 'user/message', seq: 4, data: { content: [{ type: 'text', text: '<system-reminder> 技能目录' }], source: { kind: 'skill-catalog', form: 'catalog' } } },
+  ];
+  const t = lastTurn(events);
+  assert.equal(t.query, '真正的用户问题', `查询 MUST 取真实用户输入，实际：${t.query.slice(0, 40)}`);
+  assert.equal(t.answer, '真正的回答');
+
+  // 缺 kind 时按用户处理（与 §4.1 同向的兼容面）
+  const legacy = lastTurn([
+    { type: 'user/message', seq: 1, data: { content: [{ type: 'text', text: '旧版无 kind 的消息' }] } },
+  ]);
+  assert.equal(legacy.query, '旧版无 kind 的消息');
+
+  // 只有宿主样板时不得取到它
+  const onlyHost = lastTurn([
+    { type: 'user/message', seq: 1, data: { content: [{ type: 'text', text: 'Current runtime context' }], source: { kind: 'plugin' } } },
+  ]);
+  assert.equal(onlyHost.query, '', '只有宿主样板时应保持空，MUST NOT 拿它当查询');
+});
